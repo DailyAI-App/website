@@ -4,3 +4,16 @@ node_modules
 *.local
 .DS_Store
 *.tsbuildinfo
+.data
+.vercel
+.env*
+!.env.example
+coverage
+dist
+*.log
+
+# Xcode build and user-specific files
+DerivedData
+xcuserdata
+*.xcuserstate
+*.moved-aside

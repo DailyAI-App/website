@@ -1,9 +1,10 @@
 "use client";
 
-export type VoicePhase = "idle" | "listening" | "thinking" | "speaking";
+export type VoicePhase = "idle" | "ambient" | "listening" | "thinking" | "speaking";
 
 const LABELS: Record<VoicePhase, string> = {
-  idle: "눌러서 대화 시작",
+  idle: "꺼짐 · 눌러서 켜기",
+  ambient: "\"도나\"라고 불러보세요",
   listening: "듣고 있어요…",
   thinking: "생각 중…",
   speaking: "말하는 중…",
@@ -29,8 +30,8 @@ export default function VoiceButton({
         className={`voice-btn-prominent voice-btn-${phase}`}
         onClick={onClick}
         aria-pressed={phase !== "idle"}
-        aria-label="음성 대화"
-        title="음성 대화"
+        aria-label="도나"
+        title="도나 켜기/끄기"
       >
         <span className="sr-only">{LABELS[phase]}</span>
       </button>
