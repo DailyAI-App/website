@@ -54,3 +54,23 @@ export const trainerAttempts = pgTable("trainer_attempts", {
   explanation: text("explanation").notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
+
+export const studyGoals = pgTable("study_goals", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: text("user_id").notNull(),
+  title: text("title").notNull(),
+  examDate: text("exam_date"),
+  weeklyMinutes: integer("weekly_minutes").notNull().default(300),
+  weeklyQuestions: integer("weekly_questions").notNull().default(30),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const studySessions = pgTable("study_sessions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: text("user_id").notNull(),
+  goalId: uuid("goal_id"),
+  minutes: integer("minutes").notNull(),
+  focusState: text("focus_state").notNull().default("focused"),
+  postureScore: real("posture_score"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});

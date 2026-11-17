@@ -29,6 +29,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                   <Link href="/">오늘</Link>
                   <Link href="/schedule">일정</Link>
                   <Link href="/roadmap">로드맵</Link>
+                  <Link href="/study">학습 코치</Link>
                   <Link href="/trainer">학습 트레이너</Link>
                   <Link href="/posture">자세 코칭</Link>
                 </nav>
