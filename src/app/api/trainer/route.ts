@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PDFParse } from "pdf-parse";
+import { resolveUserId } from "@/lib/auth";
+import { extractLectureText, isSupportedLectureFile } from "@/lib/document-text";
 import { askGateway } from "@/lib/gateway";
 
 const QUESTION_TYPES = ["ox", "mcq", "fill_blank", "descriptive"] as const;
@@ -84,6 +85,8 @@ function buildQuestion(type: QuestionType, parsed: Record<string, unknown>): Rec
 }
 
 export async function POST(req: NextRequest) {
+  if (!(await resolveUserId(req))) return NextResponse.json({ error: "로그인이 필요해요." }, { status: 401 });
+
   const formData = await req.formData();
   const file = formData.get("file");
   const typeField = formData.get("type");
@@ -91,24 +94,20 @@ export async function POST(req: NextRequest) {
     ? (typeField as QuestionType)
     : "descriptive";
 
-  if (!(file instanceof File) || file.type !== "application/pdf") {
-    return NextResponse.json({ error: "PDF 파일을 올려주세요." }, { status: 400 });
+  if (!(file instanceof File) || !isSupportedLectureFile(file)) {
+    return NextResponse.json({ error: "PDF 또는 PPT 파일을 올려주세요." }, { status: 400 });
   }
 
   let fullText: string;
   try {
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const parser = new PDFParse({ data: buffer });
-    const result = await parser.getText();
-    await parser.destroy();
-    fullText = result.text.trim();
+    fullText = await extractLectureText(file);
   } catch {
-    return NextResponse.json({ error: "PDF를 읽지 못했어요. 파일이 손상되지 않았는지 확인해주세요." }, { status: 400 });
+    return NextResponse.json({ error: "파일을 읽지 못했어요. 손상되지 않았는지 확인해주세요." }, { status: 400 });
   }
 
   if (fullText.length < 100) {
     return NextResponse.json(
-      { error: "텍스트를 추출할 수 없어요. 스캔된 이미지 PDF는 지원하지 않아요." },
+      { error: "텍스트를 추출할 수 없어요. 이미지로만 된 스캔 자료는 지원하지 않아요." },
       { status: 400 },
     );
   }

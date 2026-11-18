@@ -1,8 +1,8 @@
-import { auth } from "@clerk/nextjs/server";
 import { asc, eq } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/db";
 import { calendarEvents } from "@/db/schema";
+import { resolveUserId } from "@/lib/auth";
 
 async function listEvents(userId: string) {
   return getDb()
@@ -12,15 +12,15 @@ async function listEvents(userId: string) {
     .orderBy(asc(calendarEvents.date));
 }
 
-export async function GET() {
-  const { userId } = await auth();
+export async function GET(req: NextRequest) {
+  const userId = await resolveUserId(req);
   if (!userId) return NextResponse.json({ error: "로그인이 필요해요." }, { status: 401 });
 
   return NextResponse.json({ events: await listEvents(userId) });
 }
 
 export async function POST(req: NextRequest) {
-  const { userId } = await auth();
+  const userId = await resolveUserId(req);
   if (!userId) return NextResponse.json({ error: "로그인이 필요해요." }, { status: 401 });
 
   const body = await req.json();

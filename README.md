@@ -1,8 +1,8 @@
 # 데일리 AI
 
-일정, 음성 비서, 취업 로드맵, 학습 트레이너, 자세 코칭을 제공하는
-개인용 멀티플랫폼 앱입니다. 웹은 Next.js로, 자세 측정 앱은 SwiftUI로
-구성되어 있습니다.
+일정, 음성 비서, 취업 로드맵, 학습 코치(PDF/PPT 기반 퀴즈 + 오답노트), 자세
+코칭을 제공하는 개인용 멀티플랫폼 앱입니다. 웹은 Next.js로, 네이티브 앱은
+SwiftUI(iOS/iPadOS/macOS)로 구성되어 있습니다.
 
 ## 주요 기능
 
@@ -11,24 +11,24 @@
 | 오늘 | 음성 비서 `도나`, 계정별 일정 브리핑 | Neon Postgres |
 | 일정 | 월간 캘린더, 일정 생성·수정·삭제 | Neon Postgres |
 | 로드맵 | 사람인 채용공고 기반 AI 학습 로드맵 | Neon Postgres |
-| 학습 코치 | 시험 목표, 집중 세션, 오답 복습 카드, 주간 학습 리포트 | Neon Postgres |
-| 학습 트레이너 | PDF 기반 OX·객관식·빈칸·서술형 문제 | Neon Postgres |
-| 웹 자세 코칭 | AirPods 자세 코칭 앱 소개와 기록 확인 | Neon Postgres |
-| 모바일 자세 코칭 | AirPods Pro 머리 움직임 측정 | 동일한 자세 API |
+| 학습 코치 | PDF·PPT 업로드 → 자동으로 OX/객관식/빈칸/서술형 퀴즈 시작(유형·문제 수는 선택), 오답노트, 시험 목표·집중 세션·주간 리포트 | Neon Postgres |
+| 자세 코칭 | 웹은 휴대폰 기울기 센서로 체험, 네이티브 앱은 AirPods Pro 머리 움직임으로 측정 | 동일한 자세 API |
 
 모든 웹 데이터는 Clerk 사용자 계정에 연결됩니다. 음성 비서는 일정 페이지에서
-관리하는 DB 일정을 그대로 참고합니다. 학습 코치는 시험일까지 남은 기간,
-오답 유형, 집중 세션, AirPods 자세 기록을 합쳐 다음 학습 행동을 추천합니다.
-모바일 앱은
-`/posture`에서 발급한 사용자별 연동 키로 동일한 계정에 데이터를 기록합니다.
+관리하는 DB 일정을 그대로 참고합니다. 학습 코치는 업로드한 자료로 바로 퀴즈를
+시작해 유형/문제 수를 미리 고르지 않아도 되고, 오답 유형·집중 세션·AirPods
+자세 기록을 합쳐 다음 학습 행동을 추천합니다. 네이티브 앱은 `/posture`에서
+발급한 사용자별 연동 키로 **모든** 기능(일정/로드맵/학습 코치/자세)에서 동일한
+계정에 접근합니다.
 
 ## 기술 스택
 
 - **Web**: Next.js App Router, React, TypeScript
-- **Auth**: Clerk
+- **Auth**: Clerk (웹), 연동 키(Bearer 토큰, 네이티브 앱)
 - **Database**: Neon Postgres, Drizzle ORM
 - **AI**: OpenAI 호환 AI Gateway
-- **Mobile**: SwiftUI, CoreMotion, iOS/iPadOS/macOS
+- **문서 텍스트 추출**: officeparser (PDF, PPTX)
+- **Native**: SwiftUI, CoreMotion, iOS/iPadOS/macOS
 
 ## 프로젝트 구조
 
@@ -42,21 +42,27 @@ src/
 ```
 
 웹과 네이티브 앱은 서로 다른 폴더에서 관리합니다. 이 저장소에는 웹
-프로젝트만 포함하며, 네이티브 앱은 저장소와 나란히 있는
-`../apps/PostureCoach/` 폴더에서 관리합니다.
+프로젝트만 포함하며, 네이티브 앱들은 전부 `~/Develop/apps/`에 모아둡니다 —
+이 프로젝트는 `~/Develop/apps/DailyAI/`를 씁니다.
 
-### 자세 코칭 데이터 흐름
+### 인증 흐름 — 모든 `/api/*`가 공통으로 따르는 패턴
 
 ```text
-웹 기록 확인 ──────┐
-                  ├─ POST /api/posture ─ Neon Postgres
-AirPods 모바일 앱 ─┘
+웹 브라우저 ──── Clerk 세션 쿠키 ────┐
+                                    ├─ src/lib/auth.ts resolveUserId() ─ Neon Postgres
+네이티브 앱 ── Authorization: Bearer <연동 키> ─┘
 ```
 
-웹은 Clerk 세션으로, 모바일 앱은 `Authorization: Bearer <연동 키>`로
-인증합니다. 웹에서는 센서를 사용하지 않고 모바일 앱에서 업로드한 기록만
-확인합니다. AirPods 센서 측정은 iPhone·iPad·macOS 앱에서만 실행됩니다.
-자세 점수는 0~10 범위이며 5 미만은 주의 상태로 집계됩니다.
+`src/lib/auth.ts`의 `resolveUserId`가 모든 API 라우트에서 공통으로 쓰입니다.
+`Authorization: Bearer` 헤더가 있으면 그 키로, 없으면 Clerk 세션으로 사용자를
+찾습니다. `proxy.ts`는 `/api/*`를 미들웨어 레벨에서 막지 않고(Clerk이 권장하는
+"리소스 단위 인증" 패턴), 각 라우트가 직접 401을 반환합니다 — 그래서 네이티브
+앱이 일정/로드맵/학습 코치/자세 전부를 연동 키 하나로 쓸 수 있습니다.
+
+자세 코칭만 보면: 웹은 `DeviceOrientation`(휴대폰 기울기)로 체험용 측정을
+제공하고, 네이티브 앱은 AirPods Pro의 실제 머리 움직임(`CMHeadphoneMotionManager`)을
+읽어 더 정밀하게 측정합니다. 자세 점수는 0~10 범위이며 5 미만은 주의 상태로
+집계됩니다.
 
 ## 웹 실행
 
@@ -101,7 +107,7 @@ npm run dev
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | 로그인 | Clerk 공개 키 |
 | `NEXT_PUBLIC_CLERK_SIGN_IN_URL` | 로그인 | 기본값 `/sign-in` |
 | `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | 로그인 | 기본값 `/sign-up` |
-| `GATEWAY_API_KEY` | 오늘·로드맵·트레이너 | AI Gateway 키 |
+| `GATEWAY_API_KEY` | 오늘·로드맵·학습 코치 | AI Gateway 키 |
 | `SARAMIN_API_KEY` | 로드맵 | 사람인 Open API 키 |
 
 선택 기능의 키가 없으면 해당 기능만 비활성화됩니다. 로그인과
@@ -115,23 +121,24 @@ npm run dev
 자동 생성한 값은 배포 환경에 남아 있어도 되지만, 새로 작성하는
 `.env`에는 추가하지 않습니다.
 
-## 모바일 앱 실행
+## 네이티브 앱 실행
 
 ```bash
-cd ../apps/PostureCoach
-open PostureCoach.xcodeproj
+cd ~/Develop/apps/DailyAI
+xcodegen generate   # XcodeGen 필요: brew install xcodegen
+open DailyAI.xcodeproj
 ```
 
 Xcode에서:
 
-1. `PostureCoach` 스킴: iPhone/iPad
-2. `PostureCoachMac` 스킴: macOS
+1. `DailyAI` 스킴: iPhone/iPad
+2. `DailyAIMac` 스킴: macOS ("My Mac")
 3. Signing & Capabilities에서 Apple Developer Team 선택
-4. 실제 AirPods가 연결된 기기에서 실행
-5. 앱 설정에 HTTPS API 주소와 `/posture`의 연동 키 입력
+4. 앱의 설정 탭(또는 첫 실행 연결 화면)에 서버 주소와 `/posture`에서 발급한
+   연동 키를 입력 — 이 키 하나로 일정/로드맵/학습 코치/자세 전부 연동됩니다.
+5. 자세 코칭은 실제 AirPods가 연결된 기기에서 실행해야 측정됩니다 (시뮬레이터 불가).
 
-모바일 앱은 시뮬레이터에서 AirPods 센서를 측정할 수 없습니다.
-TestFlight 배포 절차는 `../apps/PostureCoach/README.md`를 참고합니다.
+TestFlight 배포 절차와 구현 범위는 `~/Develop/apps/DailyAI/README.md`를 참고합니다.
 
 ## 명령어
 

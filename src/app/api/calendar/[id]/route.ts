@@ -1,8 +1,8 @@
-import { auth } from "@clerk/nextjs/server";
 import { and, asc, eq } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/db";
 import { calendarEvents } from "@/db/schema";
+import { resolveUserId } from "@/lib/auth";
 
 async function listEvents(userId: string) {
   return getDb()
@@ -13,7 +13,7 @@ async function listEvents(userId: string) {
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { userId } = await auth();
+  const userId = await resolveUserId(req);
   if (!userId) return NextResponse.json({ error: "로그인이 필요해요." }, { status: 401 });
   const { id } = await params;
 
@@ -31,8 +31,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   return NextResponse.json({ events: await listEvents(userId) });
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { userId } = await auth();
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const userId = await resolveUserId(req);
   if (!userId) return NextResponse.json({ error: "로그인이 필요해요." }, { status: 401 });
   const { id } = await params;
 

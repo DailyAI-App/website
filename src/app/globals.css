@@ -81,6 +81,12 @@ a { color: inherit; }
 .study-hero-stat { border-left: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px; padding-left: 24px; }
 .study-hero-stat strong { font-size: 30px; letter-spacing: -0.04em; }
 .study-hero-stat span, .study-summary-card span { color: var(--muted); font-size: 11px; }
+.study-upload-card { margin-bottom: 18px; padding: 20px; }
+.study-upload-row { align-items: center; display: flex; gap: 10px; margin-top: 14px; }
+.study-upload-button { flex: 1; }
+.study-settings { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.study-settings-label { color: var(--muted); font-size: 11px; font-weight: 600; margin-right: 4px; text-transform: uppercase; }
+
 .study-goal-card { display: grid; gap: 24px; grid-template-columns: 0.9fr 1.1fr; margin-bottom: 18px; padding: 24px 20px; }
 .study-goal-card h3, .study-recommendation-card h3 { font-size: 18px; margin: 0 0 8px; }
 .study-goal-card p:not(.eyebrow), .study-recommendation-card > p:not(.eyebrow) { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 0; }
@@ -88,6 +94,9 @@ a { color: inherit; }
 .study-goal-form > .input, .study-goal-form > .btn-primary { grid-column: 1 / -1; }
 .study-field { display: grid; gap: 5px; }
 .study-field span { color: var(--muted); font-size: 11px; }
+.study-duration-row { align-items: center; display: flex; gap: 6px; }
+.study-duration-row .input { width: 64px; }
+.study-duration-row span { font-size: 13px; }
 .study-summary-grid { display: grid; gap: 12px; grid-template-columns: repeat(4, 1fr); margin-bottom: 18px; }
 .study-summary-card { min-width: 0; padding: 18px; }
 .study-summary-card strong { display: block; font-size: 20px; margin: 10px 0 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

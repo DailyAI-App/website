@@ -1,22 +1,10 @@
-import { auth } from "@clerk/nextjs/server";
 import { and, eq, gte } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/db";
 import { postureSamples } from "@/db/schema";
-import { resolveUserIdFromApiKey } from "@/lib/api-keys";
+import { resolveUserId } from "@/lib/auth";
 
 const ABNORMAL_THRESHOLD = 5; // score below this counts as "거북목" (0 = slumped, 10 = upright)
-
-// the browser dashboard authenticates with a Clerk session; companion apps
-// (iOS/macOS) that can't hold a session send a personal API key instead.
-async function resolveUserId(req: NextRequest): Promise<string | null> {
-  const authHeader = req.headers.get("authorization");
-  if (authHeader?.startsWith("Bearer ")) {
-    return resolveUserIdFromApiKey(authHeader.slice("Bearer ".length).trim());
-  }
-  const { userId } = await auth();
-  return userId;
-}
 
 function summarize(samples: { score: number }[]) {
   const abnormalCount = samples.filter((s) => s.score < ABNORMAL_THRESHOLD).length;
@@ -34,8 +22,8 @@ async function todaysSamples(userId: string) {
     .orderBy(postureSamples.capturedAt);
 }
 
-export async function GET() {
-  const { userId } = await auth();
+export async function GET(req: NextRequest) {
+  const userId = await resolveUserId(req);
   if (!userId) return NextResponse.json({ error: "로그인이 필요해요." }, { status: 401 });
 
   const samples = await todaysSamples(userId);

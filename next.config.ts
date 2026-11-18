@@ -2,10 +2,10 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   devIndicators: false,
-  // pdf-parse (pdfjs-dist) dynamically imports its own worker file by relative
-  // path — bundling it rewrites that path and breaks the lookup. Resolve it
-  // via plain Node require instead.
-  serverExternalPackages: ["pdf-parse", "pdfjs-dist"],
+  // officeparser (via pdfjs-dist) and tesseract.js dynamically import their own
+  // worker/wasm files by relative path — bundling rewrites those paths and
+  // breaks the lookup. Resolve them via plain Node require instead.
+  serverExternalPackages: ["officeparser", "pdfjs-dist", "tesseract.js"],
   turbopack: {
     rules: {
       "*.css": {

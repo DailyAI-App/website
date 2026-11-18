@@ -1,4 +1,4 @@
-import { auth } from "@clerk/nextjs/server";
+import { resolveUserId } from "@/lib/auth";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/db";
@@ -25,7 +25,7 @@ async function listRoadmaps(userId: string) {
 
 // PATCH toggles one step's done state: body { stepId }
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { userId } = await auth();
+  const userId = await resolveUserId(req);
   if (!userId) return NextResponse.json({ error: "로그인이 필요해요." }, { status: 401 });
   const { id } = await params;
 
@@ -45,8 +45,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   return NextResponse.json({ roadmaps: await listRoadmaps(userId) });
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const { userId } = await auth();
+export async function DELETE(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const userId = await resolveUserId(req);
   if (!userId) return NextResponse.json({ error: "로그인이 필요해요." }, { status: 401 });
   const { id } = await params;
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { askGateway } from "@/lib/gateway";
+import { resolveUserId } from "@/lib/auth";
 
 const SYSTEM_PROMPT = `너는 취업 준비를 돕는 커리어 코치야. 회사의 실제 채용공고 정보를 보고,
 그 회사에 지원하기 위해 순서대로 밟아야 할 학습 로드맵을 만들어줘.
@@ -46,6 +47,8 @@ function parseSteps(reply: string): string[] {
 }
 
 export async function POST(req: NextRequest) {
+  if (!(await resolveUserId(req))) return NextResponse.json({ error: "로그인이 필요해요." }, { status: 401 });
+
   const saraminKey = process.env.SARAMIN_API_KEY;
   if (!saraminKey) {
     return NextResponse.json({ error: "SARAMIN_API_KEY가 설정되지 않아 채용공고를 가져올 수 없어요." }, { status: 503 });

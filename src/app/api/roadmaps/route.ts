@@ -1,4 +1,4 @@
-import { auth } from "@clerk/nextjs/server";
+import { resolveUserId } from "@/lib/auth";
 import { asc, desc, eq, inArray } from "drizzle-orm";
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/db";
@@ -23,15 +23,15 @@ async function listRoadmaps(userId: string) {
   }));
 }
 
-export async function GET() {
-  const { userId } = await auth();
+export async function GET(req: NextRequest) {
+  const userId = await resolveUserId(req);
   if (!userId) return NextResponse.json({ error: "로그인이 필요해요." }, { status: 401 });
 
   return NextResponse.json({ roadmaps: await listRoadmaps(userId) });
 }
 
 export async function POST(req: NextRequest) {
-  const { userId } = await auth();
+  const userId = await resolveUserId(req);
   if (!userId) return NextResponse.json({ error: "로그인이 필요해요." }, { status: 401 });
 
   const body = await req.json();
