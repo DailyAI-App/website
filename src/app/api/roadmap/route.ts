@@ -25,9 +25,21 @@ roadmap.sh 스타일로 상세하게 만들어줘. 각 단계는 하나의 큰 �
 }, ...]
 
 검색으로 찾은 이 회사·직무의 실제 요구사항을 반영해야 해 — 일반적인 조언만 하지 말고, 뭉뚱그리지 말고
-구체적으로 적어.`;
+구체적으로 적어. 출처 각주나 대괄호 번호([1], [2][9] 같은 것)는 절대 넣지 말고, 자연스럽게 이어지는
+설명문으로만 써.`;
 
 type RoadmapStepDraft = { title: string; detail: string; topics: string[] };
+
+// sonar-pro's web citations show up as inline [1], [2][9] markers even when
+// told not to include them — strip them so the prose reads cleanly
+// regardless of what the model actually does.
+function stripCitations(text: string): string {
+  return text
+    .replace(/\[\d+\]/g, "")
+    .replace(/\s+([.,!?])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
 
 function parseSteps(reply: string): RoadmapStepDraft[] {
   const jsonText = reply.trim().replace(/^```(json)?/i, "").replace(/```$/, "").trim();
@@ -36,14 +48,16 @@ function parseSteps(reply: string): RoadmapStepDraft[] {
     if (!Array.isArray(parsed)) return [];
     return parsed
       .map((item): RoadmapStepDraft | null => {
-        if (typeof item === "string") return item.trim() ? { title: item.trim(), detail: "", topics: [] } : null;
+        if (typeof item === "string") return item.trim() ? { title: stripCitations(item.trim()), detail: "", topics: [] } : null;
         if (item && typeof item === "object" && typeof item.title === "string" && item.title.trim()) {
           const topics = Array.isArray(item.topics)
-            ? item.topics.filter((t: unknown): t is string => typeof t === "string" && t.trim().length > 0).map((t: string) => t.trim())
+            ? item.topics
+                .filter((t: unknown): t is string => typeof t === "string" && t.trim().length > 0)
+                .map((t: string) => stripCitations(t.trim()))
             : [];
           return {
-            title: item.title.trim(),
-            detail: typeof item.detail === "string" ? item.detail.trim() : "",
+            title: stripCitations(item.title.trim()),
+            detail: typeof item.detail === "string" ? stripCitations(item.detail.trim()) : "",
             topics,
           };
         }
