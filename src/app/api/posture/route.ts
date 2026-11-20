@@ -4,7 +4,7 @@ import { getDb } from "@/db";
 import { postureSamples } from "@/db/schema";
 import { resolveUserId } from "@/lib/auth";
 
-const ABNORMAL_THRESHOLD = 5; // score below this counts as "거북목" (0 = slumped, 10 = upright)
+const ABNORMAL_THRESHOLD = 5; // score below this counts as "distracted" (0 = not studying, 10 = focused)
 
 function summarize(samples: { score: number }[]) {
   const abnormalCount = samples.filter((s) => s.score < ABNORMAL_THRESHOLD).length;

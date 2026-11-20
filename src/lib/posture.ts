@@ -1,3 +1,6 @@
+// AirPods head-motion sensor: used to detect whether the user is actually
+// studying (worn + stable) rather than to correct posture. "score" here is
+// a focus/presence score (0-10), not a posture angle.
 export type PostureSample = {
   score: number;
   source: string;
@@ -13,9 +16,9 @@ export type PostureStats = {
 
 export function scoreLabel(score: number | null): string {
   if (score == null) return "아직 측정 전";
-  if (score >= 8) return "아주 좋아요";
-  if (score >= 6) return "조금만 더 곧게";
-  return "자세를 바로잡아 주세요";
+  if (score >= 8) return "학습에 집중하고 있어요";
+  if (score >= 6) return "조금 흔들리고 있어요";
+  return "학습에서 벗어난 것 같아요";
 }
 
 export function timeLabel(timestamp: number): string {

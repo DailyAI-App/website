@@ -1,14 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-
-type Goal = { title: string; examDate: string | null; weeklyMinutes: number; weeklyQuestions: number };
-type Mistake = { id: string; type: string; prompt: string; correctAnswer: string; explanation: string };
-type StudyData = {
-  goal: Goal | null;
-  mistakes: Mistake[];
-  analytics: { totalMinutes: number; sessionCount: number; averagePosture: number | null; mistakeCount: number; wrongTypes: Record<string, number> };
-};
+import { createRecognition, speak, speechUnsupportedMessage, type SpeechRecognitionLike } from "@/lib/voice";
+import { fetchStudy, formatMinutes, TYPE_LABELS, type StudyData } from "@/lib/study";
 
 type QuestionType = "ox" | "mcq" | "fill_blank" | "descriptive";
 type OXQuestion = { type: "ox"; statement: string; isTrue: boolean; explanation: string };
@@ -16,27 +10,12 @@ type MCQQuestion = { type: "mcq"; question: string; options: string[]; correctIn
 type FillBlankQuestion = { type: "fill_blank"; sentence: string; answer: string; explanation: string };
 type DescriptiveQuestion = { type: "descriptive"; explanation: string; flaw: string; correction: string };
 type Question = OXQuestion | MCQQuestion | FillBlankQuestion | DescriptiveQuestion;
-type Attempt = { id: string; type: string; prompt: string; correctAnswer: string; userAnswer: string; explanation: string };
+type Attempt = { id: string; type: string; prompt: string; options: string | null; correctAnswer: string; userAnswer: string; explanation: string };
+type Session = { id: string; sourceName: string; questionCount: number; createdAt: string; attempts: Attempt[] };
+type RetryItem = { question: Question; attemptId: string };
 
-const TYPE_LABELS: Record<string, string> = { ox: "OX", mcq: "객관식", fill_blank: "빈칸", descriptive: "오류 찾기" };
 const AUTO_MIX: QuestionType[] = ["mcq", "ox", "fill_blank", "descriptive"];
 const QUESTION_COUNTS = [5, 10, 20] as const;
-
-async function fetchStudy(init?: RequestInit): Promise<StudyData> {
-  const res = await fetch("/api/study", init);
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error ?? "학습 데이터를 불러오지 못했어요.");
-  return data;
-}
-
-function formatMinutes(total: number): string {
-  if (total <= 0) return "0분";
-  const hours = Math.floor(total / 60);
-  const minutes = total % 60;
-  if (hours === 0) return `${minutes}분`;
-  if (minutes === 0) return `${hours}시간`;
-  return `${hours}시간 ${minutes}분`;
-}
 
 function daysUntil(date: string | null): number | null {
   if (!date) return null;
@@ -53,8 +32,6 @@ export default function StudyPage() {
   const [examDate, setExamDate] = useState("");
   const [weeklyMinutes, setWeeklyMinutes] = useState("300");
   const [weeklyQuestions, setWeeklyQuestions] = useState("30");
-  const [seconds, setSeconds] = useState(0);
-  const [running, setRunning] = useState(false);
   const [revealedId, setRevealedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -71,6 +48,13 @@ export default function StudyPage() {
   const [quizError, setQuizError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // extracted once on the first question, then reused — re-parsing the same
+  // PDF/PPTX on every question was the main source of slow generation.
+  const lectureTextRef = useRef<string | null>(null);
+  // every prompt asked so far this session, sent back to the model so it
+  // doesn't repeat the same question (confirmed happening on short docs).
+  const askedPromptsRef = useRef<string[]>([]);
+
   const [selectedOx, setSelectedOx] = useState<boolean | null>(null);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [blankInput, setBlankInput] = useState("");
@@ -78,17 +62,26 @@ export default function StudyPage() {
   const [revealed, setRevealed] = useState(false);
   const [guess, setGuess] = useState("");
 
-  const [allMistakes, setAllMistakes] = useState<Attempt[] | null>(null);
+  const [sessions, setSessions] = useState<Session[] | null>(null);
+  const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
+  const [quizSessionId, setQuizSessionId] = useState<string | null>(null);
+
+  // "틀린 문제만 다시 풀기": replays a chapter's mistakes directly (no file
+  // or AI call needed — the full question is already stored on the attempt).
+  const [retryQueue, setRetryQueue] = useState<RetryItem[] | null>(null);
+  const [retryIndex, setRetryIndex] = useState(0);
+  const [retryComplete, setRetryComplete] = useState(false);
+
+  // voice teaching mode: AI reads the question aloud (TTS) and listens for a spoken answer (STT).
+  const [voiceMode, setVoiceMode] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState<"idle" | "asking" | "listening">("idle");
+  const [voiceUnsupported, setVoiceUnsupported] = useState<string | null>(null);
+  const [voiceTranscript, setVoiceTranscript] = useState("");
+  const voiceRecognitionRef = useRef<SpeechRecognitionLike | null>(null);
 
   useEffect(() => {
     fetchStudy().then(setData).catch((err) => setError(err instanceof Error ? err.message : "학습 데이터를 불러오지 못했어요."));
   }, []);
-
-  useEffect(() => {
-    if (!running) return;
-    const timer = window.setInterval(() => setSeconds((value) => value + 1), 1000);
-    return () => window.clearInterval(timer);
-  }, [running]);
 
   const recommendation = useMemo(() => {
     if (!data) return "학습 데이터를 모으는 중이에요.";
@@ -113,22 +106,6 @@ export default function StudyPage() {
     }
   }
 
-  async function finishSession() {
-    setRunning(false);
-    const minutes = Math.max(1, Math.round(seconds / 60));
-    try {
-      const next = await fetchStudy({
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "session", minutes, focusState: seconds >= 20 * 60 ? "steady" : "short", postureScore: null }),
-      });
-      setData(next);
-      setSeconds(0);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "학습 세션을 저장하지 못했어요.");
-    }
-  }
-
   // --- quiz session: upload kicks it off automatically, no type/count picking required ---
 
   function nextTypeFor(num: number): QuestionType {
@@ -145,19 +122,34 @@ export default function StudyPage() {
     setGuess("");
   }
 
-  async function generateQuestion(num: number) {
-    if (!file) return;
+  function promptTextOf(q: Question): string {
+    if (q.type === "ox") return q.statement;
+    if (q.type === "mcq") return q.question;
+    if (q.type === "fill_blank") return q.sentence;
+    return q.explanation;
+  }
+
+  async function generateQuestion(num: number, targetFile?: File) {
+    const cachedText = lectureTextRef.current;
+    const useFile = targetFile ?? file;
+    if (!cachedText && !useFile) return;
     setQuizLoading(true);
     setQuizError(null);
     resetAnswerState();
     try {
       const body = new FormData();
-      body.set("file", file);
+      // after the first question, reuse the already-extracted text instead
+      // of re-uploading + re-parsing the same file every time.
+      if (cachedText) body.set("text", cachedText);
+      else body.set("file", useFile as File);
       body.set("type", nextTypeFor(num));
+      body.set("exclude", JSON.stringify(askedPromptsRef.current));
       const res = await fetch("/api/trainer", { method: "POST", body });
       const payload = await res.json();
       if (!res.ok) throw new Error(payload?.error ?? "문제를 만들지 못했어요.");
+      if (typeof payload.sourceText === "string") lectureTextRef.current = payload.sourceText;
       setQuestion(payload);
+      askedPromptsRef.current = [...askedPromptsRef.current, promptTextOf(payload)];
     } catch (err) {
       setQuizError(err instanceof Error ? err.message : "알 수 없는 오류가 발생했어요.");
     } finally {
@@ -165,22 +157,51 @@ export default function StudyPage() {
     }
   }
 
-  function handleFileChange(selected: File | null) {
+  // one "생성" click = one chapter in 오답노트: create the session row up
+  // front so every mistake logged during this run can be grouped under it.
+  async function handleFileChange(selected: File | null) {
     setFile(selected);
     setQuestion(null);
     setQuestionNumber(0);
     setCompletedCount(0);
     setSessionComplete(false);
     setQuizError(null);
+    setQuizSessionId(null);
+    lectureTextRef.current = null;
+    askedPromptsRef.current = [];
     resetAnswerState();
+    if (!selected) return;
     // the whole point is "upload it and it just starts" — no extra click.
-    if (selected) {
-      setQuestionNumber(1);
-      void generateQuestion(1);
+    setQuestionNumber(1);
+    try {
+      const res = await fetch("/api/trainer/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sourceName: selected.name, questionCount }),
+      });
+      const payload = await res.json();
+      if (res.ok) setQuizSessionId(payload.id);
+    } catch {
+      // mistakes still log without a chapter if this fails
     }
+    await generateQuestion(1, selected);
   }
 
   async function handleNextQuestion() {
+    if (retryQueue) {
+      const next = retryIndex + 1;
+      if (next >= retryQueue.length) {
+        setRetryQueue(null);
+        setRetryIndex(0);
+        setQuestion(null);
+        setRetryComplete(true);
+        return;
+      }
+      setRetryIndex(next);
+      setQuestion(retryQueue[next].question);
+      resetAnswerState();
+      return;
+    }
     if (questionNumber >= questionCount) {
       setQuestion(null);
       setSessionComplete(true);
@@ -191,6 +212,8 @@ export default function StudyPage() {
     await generateQuestion(next);
   }
 
+  const isLastQuestion = retryQueue ? retryIndex >= retryQueue.length - 1 : questionNumber === questionCount;
+
   function markCompleted() {
     setCompletedCount((previous) => previous + 1);
   }
@@ -200,11 +223,25 @@ export default function StudyPage() {
       await fetch("/api/trainer/attempts", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(args),
+        body: JSON.stringify({ ...args, sessionId: quizSessionId }),
       });
       setData((prev) => (prev ? { ...prev, analytics: { ...prev.analytics, mistakeCount: prev.analytics.mistakeCount + 1 } } : prev));
     } catch {
       // the quiz experience itself doesn't depend on logging succeeding
+    }
+  }
+
+  // answering a retried mistake correctly clears it from 오답노트; answering
+  // it wrong again leaves the existing row as-is (no duplicate log entry).
+  async function resolveRetryAttempt() {
+    const attemptId = retryQueue?.[retryIndex]?.attemptId;
+    if (!attemptId) return;
+    try {
+      await fetch(`/api/trainer/attempts/${attemptId}`, { method: "DELETE" });
+      setData((prev) => (prev ? { ...prev, analytics: { ...prev.analytics, mistakeCount: Math.max(0, prev.analytics.mistakeCount - 1) } } : prev));
+      setSessions((prev) => prev?.map((s) => ({ ...s, attempts: s.attempts.filter((a) => a.id !== attemptId) })) ?? null);
+    } catch {
+      // the retry quiz itself doesn't depend on this succeeding
     }
   }
 
@@ -214,7 +251,9 @@ export default function StudyPage() {
     const isCorrect = value === question.isTrue;
     setGraded(isCorrect);
     markCompleted();
-    if (!isCorrect) {
+    if (retryQueue) {
+      if (isCorrect) void resolveRetryAttempt();
+    } else if (!isCorrect) {
       void logMistake({ type: "ox", prompt: question.statement, correctAnswer: question.isTrue ? "참" : "거짓", userAnswer: value ? "참" : "거짓", explanation: question.explanation });
     }
   }
@@ -225,35 +264,203 @@ export default function StudyPage() {
     const isCorrect = index === question.correctIndex;
     setGraded(isCorrect);
     markCompleted();
-    if (!isCorrect) {
+    if (retryQueue) {
+      if (isCorrect) void resolveRetryAttempt();
+    } else if (!isCorrect) {
       void logMistake({ type: "mcq", prompt: question.question, options: question.options, correctAnswer: question.options[question.correctIndex], userAnswer: question.options[index], explanation: question.explanation });
     }
   }
 
-  function answerBlank() {
-    if (!question || question.type !== "fill_blank" || graded !== null || !blankInput.trim()) return;
-    const isCorrect = blankInput.trim().toLowerCase() === question.answer.trim().toLowerCase();
+  function answerBlank(spokenValue?: string) {
+    const value = (spokenValue ?? blankInput).trim();
+    if (!question || question.type !== "fill_blank" || graded !== null || !value) return;
+    const isCorrect = value.toLowerCase() === question.answer.trim().toLowerCase();
     setGraded(isCorrect);
     markCompleted();
-    if (!isCorrect) {
-      void logMistake({ type: "fill_blank", prompt: question.sentence, correctAnswer: question.answer, userAnswer: blankInput.trim(), explanation: question.explanation });
+    if (retryQueue) {
+      if (isCorrect) void resolveRetryAttempt();
+    } else if (!isCorrect) {
+      void logMistake({ type: "fill_blank", prompt: question.sentence, correctAnswer: question.answer, userAnswer: value, explanation: question.explanation });
     }
   }
+
+  // --- voice teaching mode: AI asks the question out loud, user answers by speaking ---
+
+  function questionPromptText(q: Question): string {
+    if (q.type === "ox") return q.statement;
+    if (q.type === "mcq") return `${q.question} 보기는 ${q.options.map((o, i) => `${i + 1}번 ${o}`).join(", ")} 입니다.`;
+    if (q.type === "fill_blank") return q.sentence.replace("____", "빈칸");
+    return q.explanation;
+  }
+
+  function matchOxFromSpeech(transcript: string): boolean | null {
+    const t = transcript.replace(/\s/g, "");
+    if (/(거짓|아니|틀려|틀렸)/.test(t)) return false;
+    if (/(참|맞아|맞다|그래)/.test(t)) return true;
+    return null;
+  }
+
+  const NUMBER_WORDS = ["일", "이", "삼", "사"];
+  function matchMcqFromSpeech(transcript: string, options: string[]): number | null {
+    const t = transcript.replace(/\s/g, "");
+    for (let i = 0; i < options.length; i++) {
+      if (t.includes(`${i + 1}번`) || t.includes(`${NUMBER_WORDS[i]}번`)) return i;
+    }
+    const byText = options.findIndex((option) => option.trim() && t.includes(option.replace(/\s/g, "")));
+    return byText >= 0 ? byText : null;
+  }
+
+  function stopVoiceListening() {
+    voiceRecognitionRef.current?.stop();
+    voiceRecognitionRef.current = null;
+    setVoiceStatus("idle");
+  }
+
+  function listenForSpokenAnswer(onTranscript: (transcript: string) => void) {
+    const recognition = createRecognition();
+    if (!recognition) {
+      setVoiceUnsupported(speechUnsupportedMessage());
+      setVoiceStatus("idle");
+      return;
+    }
+    voiceRecognitionRef.current = recognition;
+    let handled = false;
+    recognition.onresult = (event) => {
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        const transcript = result[0].transcript.trim();
+        setVoiceTranscript(transcript);
+        if (result.isFinal) {
+          handled = true;
+          recognition.stop();
+          voiceRecognitionRef.current = null;
+          setVoiceTranscript("");
+          setVoiceStatus("idle");
+          if (transcript) onTranscript(transcript);
+          return;
+        }
+      }
+    };
+    recognition.onend = () => {
+      voiceRecognitionRef.current = null;
+      if (!handled) setVoiceStatus("idle");
+    };
+    try {
+      recognition.start();
+      setVoiceStatus("listening");
+    } catch {
+      setVoiceStatus("idle");
+    }
+  }
+
+  function askQuestionAloud(q: Question) {
+    setVoiceStatus("asking");
+    speak(questionPromptText(q), () => {
+      listenForSpokenAnswer((transcript) => {
+        if (q.type === "ox") {
+          const value = matchOxFromSpeech(transcript);
+          if (value !== null) answerOx(value);
+        } else if (q.type === "mcq") {
+          const index = matchMcqFromSpeech(transcript, q.options);
+          if (index !== null) answerMcq(index);
+        } else if (q.type === "fill_blank") {
+          setBlankInput(transcript);
+          answerBlank(transcript);
+        } else {
+          setGuess(transcript);
+          setRevealed(true);
+        }
+      });
+    });
+  }
+
+  // a fresh question (new object reference) re-triggers the AI asking it aloud.
+  useEffect(() => {
+    if (!voiceMode || !question || graded !== null) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    askQuestionAloud(question);
+    return () => {
+      if (typeof window !== "undefined") window.speechSynthesis?.cancel();
+      stopVoiceListening();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [question, voiceMode]);
+
+  // speak the result once the answer is graded.
+  useEffect(() => {
+    if (!voiceMode || graded === null || !question) return;
+    const resultPrefix = graded ? "정답이에요. " : "틀렸어요. ";
+    const explanation = question.type === "descriptive"
+      ? `틀린 부분은 ${question.flaw}. 올바른 설명은 ${question.correction}.`
+      : question.explanation;
+    speak(resultPrefix + explanation, () => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graded, voiceMode]);
+
+  useEffect(() => {
+    return () => {
+      if (typeof window !== "undefined") window.speechSynthesis?.cancel();
+      voiceRecognitionRef.current?.stop();
+    };
+  }, []);
 
   async function openNotebook() {
     setView("notebook");
     try {
       const res = await fetch("/api/trainer/attempts");
       const payload = await res.json();
-      if (res.ok) setAllMistakes(payload.attempts);
+      if (res.ok) setSessions(payload.sessions);
     } catch {
-      setAllMistakes([]);
+      setSessions([]);
     }
   }
 
   async function deleteAttempt(id: string) {
-    setAllMistakes((prev) => prev?.filter((a) => a.id !== id) ?? null);
+    setSessions((prev) => prev?.map((s) => ({ ...s, attempts: s.attempts.filter((a) => a.id !== id) })) ?? null);
     await fetch(`/api/trainer/attempts/${id}`, { method: "DELETE" });
+  }
+
+  async function deleteSession(session: Session) {
+    setSessions((prev) => prev?.filter((s) => s.id !== session.id) ?? null);
+    if (session.id === "unassigned") return; // synthetic bucket, nothing to delete server-side
+    await fetch(`/api/trainer/sessions/${session.id}`, { method: "DELETE" });
+  }
+
+  // rebuilds a question straight from a stored mistake — no file or AI call
+  // needed, the gradable types already carry everything required to replay it.
+  function buildRetryQuestion(attempt: Attempt): Question | null {
+    if (attempt.type === "ox") {
+      return { type: "ox", statement: attempt.prompt, isTrue: attempt.correctAnswer === "참", explanation: attempt.explanation };
+    }
+    if (attempt.type === "mcq") {
+      const options: string[] = attempt.options ? JSON.parse(attempt.options) : [];
+      const correctIndex = options.indexOf(attempt.correctAnswer);
+      if (options.length === 0 || correctIndex < 0) return null;
+      return { type: "mcq", question: attempt.prompt, options, correctIndex, explanation: attempt.explanation };
+    }
+    if (attempt.type === "fill_blank") {
+      return { type: "fill_blank", sentence: attempt.prompt, answer: attempt.correctAnswer, explanation: attempt.explanation };
+    }
+    return null;
+  }
+
+  function startRetry(session: Session) {
+    const queue: RetryItem[] = session.attempts
+      .map((attempt) => {
+        const q = buildRetryQuestion(attempt);
+        return q ? { question: q, attemptId: attempt.id } : null;
+      })
+      .filter((item): item is RetryItem => item !== null);
+    if (queue.length === 0) return;
+    setRetryQueue(queue);
+    setRetryIndex(0);
+    setCompletedCount(0);
+    setQuestionNumber(0);
+    setSessionComplete(false);
+    setRetryComplete(false);
+    setQuestion(queue[0].question);
+    resetAnswerState();
+    setView("home");
   }
 
   const examDays = daysUntil(data?.goal?.examDate ?? null);
@@ -265,21 +472,52 @@ export default function StudyPage() {
       <div className="page-shell">
         <button type="button" className="link-back" onClick={() => setView("home")}>‹ 학습 코치로 돌아가기</button>
         <div className="section-heading"><div><p className="eyebrow">오답노트</p><h2 className="trainer-notebook-title">틀린 문제 모아보기</h2></div></div>
-        {allMistakes === null && <p className="chat-empty-text">불러오는 중…</p>}
-        {allMistakes?.length === 0 && <p className="chat-empty-text">아직 틀린 문제가 없어요.</p>}
+        {sessions === null && <p className="chat-empty-text">불러오는 중…</p>}
+        {sessions?.length === 0 && <p className="chat-empty-text">아직 틀린 문제가 없어요.</p>}
         <div className="trainer-notebook-list">
-          {allMistakes?.map((a) => (
-            <div key={a.id} className="card trainer-notebook-item">
-              <div className="trainer-notebook-item-head">
-                <span className="badge badge-neutral">{TYPE_LABELS[a.type] ?? a.type}</span>
-                <button type="button" className="btn-text-danger" onClick={() => void deleteAttempt(a.id)}>삭제</button>
+          {sessions?.map((session) => {
+            const isExpanded = expandedSessionId === session.id;
+            const canRetry = session.attempts.some((a) => a.type !== "descriptive");
+            return (
+              <div key={session.id} className="card trainer-notebook-session">
+                <button
+                  type="button"
+                  className="trainer-notebook-session-head"
+                  onClick={() => setExpandedSessionId(isExpanded ? null : session.id)}
+                >
+                  <div>
+                    <strong>{session.sourceName}</strong>
+                    <span>{new Date(session.createdAt).toLocaleDateString("ko-KR")} · {session.questionCount}문제 중 {session.attempts.length}개 오답</span>
+                  </div>
+                  <span className="chip">{isExpanded ? "접기" : "자세히"}</span>
+                </button>
+                {isExpanded && (
+                  <div className="trainer-notebook-session-body">
+                    <div className="trainer-notebook-session-actions">
+                      {canRetry && (
+                        <button type="button" className="btn-primary" onClick={() => startRetry(session)}>틀린 문제만 다시 풀기</button>
+                      )}
+                      <button type="button" className="btn-text-danger" onClick={() => void deleteSession(session)}>챕터 삭제</button>
+                    </div>
+                    <div className="trainer-notebook-list">
+                      {session.attempts.map((a) => (
+                        <div key={a.id} className="card trainer-notebook-item">
+                          <div className="trainer-notebook-item-head">
+                            <span className="badge badge-neutral">{TYPE_LABELS[a.type] ?? a.type}</span>
+                            <button type="button" className="btn-text-danger" onClick={() => void deleteAttempt(a.id)}>삭제</button>
+                          </div>
+                          <p className="trainer-notebook-prompt">{a.prompt}</p>
+                          <p className="trainer-notebook-answer"><strong>내 답</strong>{a.userAnswer}</p>
+                          <p className="trainer-notebook-answer trainer-notebook-answer-correct"><strong>정답</strong>{a.correctAnswer}</p>
+                          <p className="trainer-notebook-explanation">{a.explanation}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
-              <p className="trainer-notebook-prompt">{a.prompt}</p>
-              <p className="trainer-notebook-answer"><strong>내 답</strong>{a.userAnswer}</p>
-              <p className="trainer-notebook-answer trainer-notebook-answer-correct"><strong>정답</strong>{a.correctAnswer}</p>
-              <p className="trainer-notebook-explanation">{a.explanation}</p>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     );
@@ -297,6 +535,10 @@ export default function StudyPage() {
           <strong>{formatMinutes(data?.analytics.totalMinutes ?? 0)}</strong>
           <span>이번 주 학습</span>
         </div>
+        <div className="study-hero-stat">
+          <strong>{data?.analytics.currentStreak ? `🔥 ${data.analytics.currentStreak}일` : "0일"}</strong>
+          <span>연속 학습 스트릭</span>
+        </div>
       </div>
 
       {error && <p className="assistant-error">{error}</p>}
@@ -305,8 +547,26 @@ export default function StudyPage() {
       <section className="card study-upload-card">
         <div className="section-heading">
           <div><p className="eyebrow">강의 자료 업로드</p><h3>PDF나 PPT를 올리면 바로 학습이 시작돼요</h3></div>
-          <button type="button" className="chip" onClick={() => void openNotebook()}>오답노트</button>
+          <div className="study-upload-row" style={{ gap: 8 }}>
+            <button
+              type="button"
+              className={voiceMode ? "chip chip-active" : "chip"}
+              onClick={() => setVoiceMode((v) => !v)}
+            >
+              🎙️ 음성으로 풀기
+            </button>
+            <button type="button" className="chip" onClick={() => void openNotebook()}>오답노트</button>
+          </div>
         </div>
+
+        {voiceUnsupported && <p className="assistant-error">{voiceUnsupported}</p>}
+        {voiceMode && question && (
+          <p className="chat-empty-text">
+            {voiceStatus === "asking" && "AI가 문제를 읽어주고 있어요…"}
+            {voiceStatus === "listening" && (voiceTranscript ? `듣고 있어요: “${voiceTranscript}”` : "답을 말해보세요…")}
+            {voiceStatus === "idle" && graded === null && "답변을 기다리고 있어요."}
+          </p>
+        )}
 
         {!question && !sessionComplete && (
           <div className="study-upload-row">
@@ -315,7 +575,7 @@ export default function StudyPage() {
               type="file"
               accept=".pdf,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation"
               className="sr-only"
-              onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
+              onChange={(e) => void handleFileChange(e.target.files?.[0] ?? null)}
             />
             <button type="button" className="btn-primary study-upload-button" onClick={() => fileInputRef.current?.click()} disabled={quizLoading}>
               {quizLoading ? "문제를 만드는 중…" : file ? file.name : "강의 자료 선택하고 바로 시작"}
@@ -346,14 +606,14 @@ export default function StudyPage() {
           </div>
         )}
 
-        {questionNumber > 0 && !sessionComplete && (
+        {(questionNumber > 0 || retryQueue) && !sessionComplete && !retryComplete && (
           <div className="trainer-progress">
             <div className="trainer-progress-head">
-              <span>학습 세션</span>
-              <strong>{questionNumber} / {questionCount} 문제</strong>
+              <span>{retryQueue ? "틀린 문제만 다시 풀기" : "학습 세션"}</span>
+              <strong>{retryQueue ? retryIndex + 1 : questionNumber} / {retryQueue ? retryQueue.length : questionCount} 문제</strong>
             </div>
             <div className="trainer-progress-track">
-              <div className="trainer-progress-value" style={{ width: `${(completedCount / questionCount) * 100}%` }} />
+              <div className="trainer-progress-value" style={{ width: `${(completedCount / (retryQueue ? retryQueue.length : questionCount)) * 100}%` }} />
             </div>
           </div>
         )}
@@ -372,6 +632,18 @@ export default function StudyPage() {
           </div>
         )}
 
+        {retryComplete && (
+          <div className="trainer-complete">
+            <p className="eyebrow">복습 완료</p>
+            <h3>틀린 문제를 모두 다시 풀었어요.</h3>
+            <p>맞힌 문제는 오답노트에서 사라졌어요.</p>
+            <div className="trainer-control-actions">
+              <button type="button" className="chip" onClick={() => { setRetryComplete(false); void openNotebook(); }}>오답노트 보기</button>
+              <button type="button" className="btn-text-danger" onClick={() => setRetryComplete(false)}>닫기</button>
+            </div>
+          </div>
+        )}
+
         {question?.type === "ox" && (
           <div className="trainer-card">
             <p className="eyebrow">참일까요, 거짓일까요?</p>
@@ -384,7 +656,7 @@ export default function StudyPage() {
               <div className={graded ? "trainer-reveal trainer-reveal-correct" : "trainer-reveal trainer-reveal-wrong"}>
                 <p><strong>{graded ? "정답이에요" : "틀렸어요"}</strong>{question.explanation}</p>
                 <button type="button" className="btn-primary trainer-next-button" onClick={() => void handleNextQuestion()}>
-                  {questionNumber === questionCount ? "학습 완료" : "다음 문제"}
+                  {isLastQuestion ? "학습 완료" : "다음 문제"}
                 </button>
               </div>
             )}
@@ -411,7 +683,7 @@ export default function StudyPage() {
               <div className={graded ? "trainer-reveal trainer-reveal-correct" : "trainer-reveal trainer-reveal-wrong"}>
                 <p><strong>{graded ? "정답이에요" : "틀렸어요"}</strong>{question.explanation}</p>
                 <button type="button" className="btn-primary trainer-next-button" onClick={() => void handleNextQuestion()}>
-                  {questionNumber === questionCount ? "학습 완료" : "다음 문제"}
+                  {isLastQuestion ? "학습 완료" : "다음 문제"}
                 </button>
               </div>
             )}
@@ -424,13 +696,13 @@ export default function StudyPage() {
             <p className="trainer-explanation">{question.sentence}</p>
             <div className="trainer-ox-row">
               <input className="input" placeholder="정답 입력" value={blankInput} onChange={(e) => setBlankInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && answerBlank()} disabled={graded !== null} />
-              <button type="button" className="btn-primary" onClick={answerBlank} disabled={graded !== null || !blankInput.trim()}>제출</button>
+              <button type="button" className="btn-primary" onClick={() => answerBlank()} disabled={graded !== null || !blankInput.trim()}>제출</button>
             </div>
             {graded !== null && (
               <div className={graded ? "trainer-reveal trainer-reveal-correct" : "trainer-reveal trainer-reveal-wrong"}>
                 <p><strong>{graded ? "정답이에요" : `틀렸어요 (정답: ${question.answer})`}</strong>{question.explanation}</p>
                 <button type="button" className="btn-primary trainer-next-button" onClick={() => void handleNextQuestion()}>
-                  {questionNumber === questionCount ? "학습 완료" : "다음 문제"}
+                  {isLastQuestion ? "학습 완료" : "다음 문제"}
                 </button>
               </div>
             )}
@@ -448,7 +720,7 @@ export default function StudyPage() {
                 <p><strong>틀린 부분</strong>{question.flaw}</p>
                 <p><strong>올바른 설명</strong>{question.correction}</p>
                 <button type="button" className="btn-primary trainer-next-button" onClick={() => { markCompleted(); void handleNextQuestion(); }}>
-                  {questionNumber === questionCount ? "학습 완료" : "다음 문제"}
+                  {isLastQuestion ? "학습 완료" : "다음 문제"}
                 </button>
               </div>
             )}
@@ -497,26 +769,14 @@ export default function StudyPage() {
         <div className="card study-summary-card"><span>학습 목표</span><strong>{data?.goal?.title ?? "설정 안 함"}</strong><p>{examDays === null ? "시험일을 정하지 않았어요." : `시험까지 ${examDays}일`}</p></div>
         <div className="card study-summary-card"><span>주간 진행률</span><strong>{minutesProgress}%</strong><div className="study-progress-track"><div className="study-progress-value" style={{ width: `${minutesProgress}%` }} /></div><p>{formatMinutes(data?.analytics.totalMinutes ?? 0)} / {formatMinutes(minutesTarget)}</p></div>
         <div className="card study-summary-card"><span>복습 필요</span><strong>{data?.analytics.mistakeCount ?? 0}개</strong><p>오답노트 기반 맞춤 복습</p></div>
-        <div className="card study-summary-card"><span>자세 평균</span><strong>{data?.analytics.averagePosture == null ? "—" : `${data.analytics.averagePosture}/10`}</strong><p>앱 자세 기록 기준</p></div>
+        <div className="card study-summary-card"><span>학습 감지 점수</span><strong>{data?.analytics.averagePosture == null ? "—" : `${data.analytics.averagePosture}/10`}</strong><p>AirPods로 감지한 집중도 평균</p></div>
       </section>
 
-      <section className="study-main-grid">
-        <div className="card study-focus-card">
-          <div className="section-heading"><div><p className="eyebrow">Focus session</p><h3>오늘의 집중 세션</h3></div><span className="status-dot">{running ? "집중 중" : "준비됨"}</span></div>
-          <div className="study-timer">{String(Math.floor(seconds / 60)).padStart(2, "0")}:{String(seconds % 60).padStart(2, "0")}</div>
-          <p className="study-focus-copy">{running ? "지금은 한 가지 학습에만 집중해보세요. 25분 뒤 휴식을 권장합니다." : recommendation}</p>
-          <div className="study-focus-actions">
-            {!running ? <button type="button" className="btn-primary" onClick={() => setRunning(true)}>집중 시작</button> : <button type="button" className="btn-primary" onClick={() => void finishSession()}>세션 저장</button>}
-            {running && <button type="button" className="chip" onClick={() => setSeconds(0)}>타이머 초기화</button>}
-          </div>
-        </div>
-
-        <div className="card study-recommendation-card">
-          <p className="eyebrow">Adaptive recommendation</p>
-          <h3>오늘의 학습 제안</h3>
-          <p>{recommendation}</p>
-          <div className="study-next-steps"><span>1</span><p>오답 유형을 5분 복습</p><span>2</span><p>관련 문제 5개 풀이</p><span>3</span><p>틀린 이유를 한 줄 기록</p></div>
-        </div>
+      <section className="card study-recommendation-card">
+        <p className="eyebrow">Adaptive recommendation</p>
+        <h3>오늘의 학습 제안</h3>
+        <p>{recommendation}</p>
+        <div className="study-next-steps"><span>1</span><p>오답 유형을 5분 복습</p><span>2</span><p>관련 문제 5개 풀이</p><span>3</span><p>틀린 이유를 한 줄 기록</p></div>
       </section>
 
       <section className="card study-review-card">

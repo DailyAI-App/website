@@ -24,6 +24,9 @@ export const roadmapSteps = pgTable("roadmap_steps", {
   position: integer("position").notNull(),
 });
 
+// despite the name, "score" is now an AirPods-detected study-presence/focus
+// score (wearing + head stability), not a posture angle — kept as-is to
+// avoid a DB migration; see src/app/api/posture/route.ts and HeadphoneMotionService.
 export const postureSamples = pgTable("posture_samples", {
   id: uuid("id").primaryKey().defaultRandom(),
   userId: text("user_id").notNull(),
@@ -41,11 +44,23 @@ export const apiKeys = pgTable("api_keys", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
+// one quiz run (one "생성" click with a chosen question count) — 오답노트
+// groups trainerAttempts under the session they came from instead of
+// listing every wrong answer as a flat, unrelated row.
+export const quizSessions = pgTable("quiz_sessions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: text("user_id").notNull(),
+  sourceName: text("source_name").notNull(),
+  questionCount: integer("question_count").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
 // 오답노트: only the gradable trainer types (ox/mcq/fill_blank) log here, and
 // only wrong attempts — it's a review list of mistakes, not a full history.
 export const trainerAttempts = pgTable("trainer_attempts", {
   id: uuid("id").primaryKey().defaultRandom(),
   userId: text("user_id").notNull(),
+  sessionId: uuid("session_id").references(() => quizSessions.id, { onDelete: "cascade" }),
   type: text("type").notNull(), // "ox" | "mcq" | "fill_blank"
   prompt: text("prompt").notNull(),
   options: text("options"), // JSON-stringified string[] for mcq, null otherwise

@@ -6,7 +6,7 @@ export default function PostureActivityChart({ stats }: { stats: PostureStats | 
   return (
     <div className="card posture-history-card">
       <div className="posture-card-heading">
-        <div><p className="eyebrow">ACTIVITY</p><h2>오늘의 자세 흐름</h2></div>
+        <div><p className="eyebrow">ACTIVITY</p><h2>오늘의 학습 감지 흐름</h2></div>
         <span className="status-dot">자동 저장</span>
       </div>
       {samples.length > 0 ? (
