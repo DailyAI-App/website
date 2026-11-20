@@ -1,5 +1,6 @@
-// shared speech-recognition + speech-synthesis helpers, used by both the
-// "도나" assistant (ChatPanel) and the voice study mode (study page).
+// shared speech-recognition + speech-synthesis helpers for the study
+// page's voice teaching mode (AI reads the question aloud, listens for a
+// spoken answer).
 
 export type SpeechRecognitionAlternative = { transcript: string };
 export type SpeechRecognitionResult = { isFinal: boolean; length: number; [j: number]: SpeechRecognitionAlternative };
