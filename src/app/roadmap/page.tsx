@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 type RoadmapStep = { id: string; title: string; detail: string | null; topics: string[]; done: boolean };
-type Roadmap = { id: string; company: string; createdAt: string; steps: RoadmapStep[] };
+type Roadmap = { id: string; company: string; role: string | null; createdAt: string; steps: RoadmapStep[] };
 
 async function fetchJSON(url: string, init?: RequestInit): Promise<{ roadmaps: Roadmap[] }> {
   const res = await fetch(url, init);
@@ -15,6 +15,7 @@ async function fetchJSON(url: string, init?: RequestInit): Promise<{ roadmaps: R
 export default function RoadmapPage() {
   const [roadmaps, setRoadmaps] = useState<Roadmap[]>([]);
   const [company, setCompany] = useState("");
+  const [role, setRole] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -27,15 +28,16 @@ export default function RoadmapPage() {
   }, []);
 
   async function handleGenerate() {
-    const trimmed = company.trim();
-    if (!trimmed) return;
+    const trimmedCompany = company.trim();
+    const trimmedRole = role.trim();
+    if (!trimmedCompany || !trimmedRole) return;
     setLoading(true);
     setError(null);
     try {
       const res = await fetch("/api/roadmap", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ company: trimmed }),
+        body: JSON.stringify({ company: trimmedCompany, role: trimmedRole }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? "로드맵을 만들지 못했어요.");
@@ -43,11 +45,12 @@ export default function RoadmapPage() {
       const saved = await fetchJSON("/api/roadmaps", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ company: trimmed, steps: data.steps }),
+        body: JSON.stringify({ company: trimmedCompany, role: trimmedRole, steps: data.steps }),
       });
       setRoadmaps(saved.roadmaps);
       setActiveId(saved.roadmaps[0].id);
       setCompany("");
+      setRole("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "알 수 없는 오류가 발생했어요.");
     } finally {
@@ -85,7 +88,7 @@ export default function RoadmapPage() {
         <button type="button" className="link-back" onClick={() => setActiveId(null)}>‹ 목록으로</button>
         <div className="card roadmap-challenge">
           <div className="roadmap-challenge-head">
-            <h2>{active.company}</h2>
+            <h2>{active.company}{active.role && <span className="roadmap-challenge-role"> · {active.role}</span>}</h2>
             <button type="button" className="btn-text-danger" onClick={() => void handleDelete(active.id)}>삭제</button>
           </div>
           <div className="roadmap-progress-track">
@@ -93,41 +96,46 @@ export default function RoadmapPage() {
           </div>
           <p className="schedule-caption">{doneCount} / {active.steps.length} 완료</p>
 
-          <ol className="roadmap-path">
+          <div className="roadmap-map">
             {active.steps.map((step, i) => {
               const isExpanded = expandedStepId === step.id;
               const isCurrent = i === currentIndex;
-              const stateClass = step.done ? "roadmap-node-done" : isCurrent ? "roadmap-node-current" : "roadmap-node-locked";
+              const side = i % 2 === 0 ? "right" : "left";
+              const stateClass = step.done ? "roadmap-map-row-done" : isCurrent ? "roadmap-map-row-current" : "roadmap-map-row-locked";
               return (
-                <li key={step.id} className={`roadmap-node ${stateClass}`}>
-                  <div className="roadmap-node-card">
-                    <button type="button" className="roadmap-node-circle-btn" onClick={() => void handleToggleStep(active.id, step.id)}>
-                      <span className="roadmap-node-circle">{step.done ? "✓" : i + 1}</span>
-                    </button>
-                    <div className="roadmap-node-body">
-                      <button type="button" className="roadmap-node-head" onClick={() => void handleToggleStep(active.id, step.id)}>
-                        <span className="roadmap-node-title">{step.title}</span>
-                        {isCurrent && <span className="roadmap-node-badge">지금</span>}
+                <div key={step.id} className={`roadmap-map-row roadmap-map-row-${side} ${stateClass}`}>
+                  <div className="roadmap-map-node-wrap">
+                    <div className="roadmap-map-node">
+                      <button type="button" className="roadmap-map-circle-btn" onClick={() => void handleToggleStep(active.id, step.id)}>
+                        <span className="roadmap-map-circle">{step.done ? "✓" : i + 1}</span>
                       </button>
-                      {step.topics.length > 0 && (
-                        <div className="roadmap-node-topics">
-                          {step.topics.map((topic) => (
-                            <span key={topic} className="roadmap-node-topic">{topic}</span>
-                          ))}
-                        </div>
-                      )}
-                      {step.detail && (
-                        <button type="button" className="roadmap-node-toggle" onClick={() => setExpandedStepId(isExpanded ? null : step.id)}>
-                          {isExpanded ? "접기" : "자세히"}
-                        </button>
-                      )}
-                      {isExpanded && step.detail && <p className="roadmap-node-detail">{step.detail}</p>}
+                      <button type="button" className="roadmap-map-title-btn" onClick={() => void handleToggleStep(active.id, step.id)}>
+                        <span className="roadmap-map-title">{step.title}</span>
+                        {isCurrent && <span className="roadmap-map-badge">지금</span>}
+                      </button>
                     </div>
+                    {step.detail && (
+                      <button type="button" className="roadmap-map-detail-toggle" onClick={() => setExpandedStepId(isExpanded ? null : step.id)}>
+                        {isExpanded ? "접기" : "자세히"}
+                      </button>
+                    )}
+                    {isExpanded && step.detail && <p className="roadmap-map-detail">{step.detail}</p>}
                   </div>
-                </li>
+
+                  {step.topics.length > 0 && (
+                    <div className="roadmap-map-branch">
+                      <span className="roadmap-map-branch-line" />
+                      <div className="roadmap-map-branch-topics">
+                        {step.topics.map((topic) => (
+                          <span key={topic} className="roadmap-map-topic">{topic}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               );
             })}
-          </ol>
+          </div>
         </div>
       </div>
     );
@@ -138,13 +146,21 @@ export default function RoadmapPage() {
       <div className="card roadmap-composer">
         <input
           className="input"
-          placeholder="회사 이름을 입력하세요 (예: 네이버)"
+          placeholder="회사 이름 (예: 네이버)"
           value={company}
           onChange={(e) => setCompany(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleGenerate()}
           disabled={loading}
         />
-        <button type="button" className="btn-primary" onClick={() => void handleGenerate()} disabled={loading || !company.trim()}>
+        <input
+          className="input"
+          placeholder="직업/직무 (예: 백엔드 개발자, 마케터, UX 디자이너)"
+          value={role}
+          onChange={(e) => setRole(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleGenerate()}
+          disabled={loading}
+        />
+        <button type="button" className="btn-primary" onClick={() => void handleGenerate()} disabled={loading || !company.trim() || !role.trim()}>
           {loading ? "분석 중…" : "로드맵 만들기"}
         </button>
       </div>
@@ -166,7 +182,7 @@ export default function RoadmapPage() {
               }}
             >
               <div>
-                <strong>{r.company}</strong>
+                <strong>{r.company}{r.role && <span className="roadmap-row-role"> · {r.role}</span>}</strong>
                 <p className="schedule-caption">{doneCount} / {r.steps.length} 완료</p>
               </div>
               <button

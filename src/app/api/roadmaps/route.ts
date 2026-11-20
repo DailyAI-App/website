@@ -28,6 +28,7 @@ async function listRoadmaps(userId: string) {
   return rows.map((r) => ({
     id: r.id,
     company: r.company,
+    role: r.role,
     createdAt: r.createdAt,
     steps: steps.filter((s) => s.roadmapId === r.id).map((s) => ({ id: s.id, title: s.title, detail: s.detail, topics: parseTopics(s.topics), done: s.done })),
   }));
@@ -68,13 +69,17 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
   const company: unknown = body?.company;
+  const role: unknown = body?.role;
   const steps = normalizeSteps(body?.steps);
   if (typeof company !== "string" || !company.trim() || steps.length === 0) {
     return NextResponse.json({ error: "company와 steps가 필요해요." }, { status: 400 });
   }
 
   const db = getDb();
-  const [roadmap] = await db.insert(roadmaps).values({ userId, company: company.trim() }).returning();
+  const [roadmap] = await db
+    .insert(roadmaps)
+    .values({ userId, company: company.trim(), role: typeof role === "string" && role.trim() ? role.trim() : null })
+    .returning();
   await db.insert(roadmapSteps).values(
     steps.map((step, i) => ({
       roadmapId: roadmap.id,

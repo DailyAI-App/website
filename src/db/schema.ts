@@ -13,6 +13,9 @@ export const roadmaps = pgTable("roadmaps", {
   id: uuid("id").primaryKey().defaultRandom(),
   userId: text("user_id").notNull(),
   company: text("company").notNull(),
+  // the target job/role at that company — was always implicitly
+  // "developer"; now the user names it (marketer, designer, PM, ...).
+  role: text("role"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

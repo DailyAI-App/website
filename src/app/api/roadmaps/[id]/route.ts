@@ -28,6 +28,7 @@ async function listRoadmaps(userId: string) {
   return rows.map((r) => ({
     id: r.id,
     company: r.company,
+    role: r.role,
     createdAt: r.createdAt,
     steps: steps.filter((s) => s.roadmapId === r.id).map((s) => ({ id: s.id, title: s.title, detail: s.detail, topics: parseTopics(s.topics), done: s.done })),
   }));
