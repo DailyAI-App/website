@@ -135,6 +135,10 @@ export default function StudyPage() {
     if (!cachedText && !useFile) return;
     setQuizLoading(true);
     setQuizError(null);
+    // clear the previous question immediately — leaving it rendered while
+    // the next one loads let you answer the stale question a second time
+    // right before it swapped out from under you.
+    setQuestion(null);
     resetAnswerState();
     try {
       const body = new FormData();
@@ -568,7 +572,7 @@ export default function StudyPage() {
           </p>
         )}
 
-        {!question && !sessionComplete && (
+        {questionNumber === 0 && !retryQueue && !sessionComplete && (
           <div className="study-upload-row">
             <input
               ref={fileInputRef}
@@ -585,7 +589,16 @@ export default function StudyPage() {
         )}
         {quizError && <p className="assistant-error">{quizError}</p>}
 
-        {showSettings && !question && (
+        {/* between questions: the old question is cleared immediately on
+            "다음 문제", so this fills the gap instead of leaving a stale,
+            still-answerable question on screen while the next one loads. */}
+        {quizLoading && !question && questionNumber > 0 && !sessionComplete && (
+          <div className="trainer-card">
+            <p className="chat-empty-text">다음 문제를 만들고 있어요…</p>
+          </div>
+        )}
+
+        {showSettings && questionNumber === 0 && !retryQueue && (
           <div className="study-settings">
             <div className="control-group">
               <span className="study-settings-label">문제 유형</span>
