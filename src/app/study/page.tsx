@@ -723,7 +723,7 @@ export default function StudyPage() {
             <p className="eyebrow">이 설명 중 한 군데가 틀렸어요</p>
             <p className="trainer-explanation">{question.explanation}</p>
             <textarea className="input trainer-guess" placeholder="어디가, 왜 틀렸다고 생각하는지 적어보세요" value={guess} onChange={(e) => setGuess(e.target.value)} rows={3} />
-            <button type="button" className="btn-primary" onClick={() => setRevealed(true)} disabled={revealed}>정답 확인</button>
+            <button type="button" className="btn-primary" onClick={() => setRevealed(true)} disabled={revealed || !guess.trim()}>정답 확인</button>
             {revealed && (
               <div className="trainer-reveal">
                 <p><strong>틀린 부분</strong>{question.flaw}</p>
