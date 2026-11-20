@@ -10,23 +10,32 @@ const SEARCH_MODEL = "sonar-pro";
 const SYSTEM_PROMPT = `너는 취업 준비를 돕는 커리어 코치야. 주어진 회사에 대해 웹을 검색해서
 최신 채용공고, 요구 기술 스택, 지원 자격 요건, 인재상, 면접 후기를 찾아봐.
 그 내용을 바탕으로 이 회사에 지원하기 위해 순서대로 밟아야 할 학습 로드맵을 만들어줘.
+roadmap.sh처럼, 각 단계 제목뿐 아니라 그 단계에서 구체적으로 무엇을 공부/연습해야 하는지까지 적어줘.
 
-반드시 6~10개의 짧은 단계로, 다른 설명 없이 JSON 문자열 배열로만 답해. 예: ["단계1", "단계2"]
-각 단계는 한 문장으로, 구체적인 기술/행동을 담아줘 (예: "Spring Boot로 REST API 만들어보기").
+반드시 6~10개의 단계로, 다른 설명 없이 아래 형식의 JSON 배열로만 답해:
+[{"title": "단계 제목 (한 문장)", "detail": "이 단계에서 공부/연습할 내용 2~4문장. 구체적인 기술·개념·도구 이름을 포함해"}, ...]
+
 검색으로 찾은 이 회사의 실제 기술 스택과 채용 요건을 반영해야 해 — 일반적인 조언만 하지 마.`;
 
-function parseSteps(reply: string): string[] {
+type RoadmapStepDraft = { title: string; detail: string };
+
+function parseSteps(reply: string): RoadmapStepDraft[] {
   const jsonText = reply.trim().replace(/^```(json)?/i, "").replace(/```$/, "").trim();
   try {
     const parsed = JSON.parse(jsonText);
-    if (Array.isArray(parsed)) return parsed.filter((s): s is string => typeof s === "string" && s.trim().length > 0).map((s) => s.trim());
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item): RoadmapStepDraft | null => {
+        if (typeof item === "string") return item.trim() ? { title: item.trim(), detail: "" } : null;
+        if (item && typeof item === "object" && typeof item.title === "string" && item.title.trim()) {
+          return { title: item.title.trim(), detail: typeof item.detail === "string" ? item.detail.trim() : "" };
+        }
+        return null;
+      })
+      .filter((s): s is RoadmapStepDraft => s !== null);
   } catch {
-    // fall through to line-based parsing below
+    return [];
   }
-  return jsonText
-    .split("\n")
-    .map((line) => line.replace(/^[-*\d.\s]+/, "").trim())
-    .filter(Boolean);
 }
 
 export async function POST(req: NextRequest) {

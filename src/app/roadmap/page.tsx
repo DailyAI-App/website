@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-type RoadmapStep = { id: string; title: string; done: boolean };
+type RoadmapStep = { id: string; title: string; detail: string | null; done: boolean };
 type Roadmap = { id: string; company: string; createdAt: string; steps: RoadmapStep[] };
 
 async function fetchJSON(url: string, init?: RequestInit): Promise<{ roadmaps: Roadmap[] }> {
@@ -18,6 +18,7 @@ export default function RoadmapPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [expandedStepId, setExpandedStepId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchJSON("/api/roadmaps")
@@ -88,14 +89,25 @@ export default function RoadmapPage() {
           <p className="schedule-caption">{doneCount} / {active.steps.length} 완료</p>
 
           <ol className="roadmap-path">
-            {active.steps.map((step, i) => (
-              <li key={step.id} className={step.done ? "roadmap-node roadmap-node-done" : "roadmap-node"}>
-                <button type="button" className="roadmap-node-btn" onClick={() => void handleToggleStep(active.id, step.id)}>
-                  <span className="roadmap-node-circle">{step.done ? "✓" : i + 1}</span>
-                  <span className="roadmap-node-title">{step.title}</span>
-                </button>
-              </li>
-            ))}
+            {active.steps.map((step, i) => {
+              const isExpanded = expandedStepId === step.id;
+              return (
+                <li key={step.id} className={step.done ? "roadmap-node roadmap-node-done" : "roadmap-node"}>
+                  <div className="roadmap-node-row">
+                    <button type="button" className="roadmap-node-btn" onClick={() => void handleToggleStep(active.id, step.id)}>
+                      <span className="roadmap-node-circle">{step.done ? "✓" : i + 1}</span>
+                      <span className="roadmap-node-title">{step.title}</span>
+                    </button>
+                    {step.detail && (
+                      <button type="button" className="roadmap-node-toggle" onClick={() => setExpandedStepId(isExpanded ? null : step.id)}>
+                        {isExpanded ? "접기" : "자세히"}
+                      </button>
+                    )}
+                  </div>
+                  {isExpanded && step.detail && <p className="roadmap-node-detail">{step.detail}</p>}
+                </li>
+              );
+            })}
           </ol>
         </div>
       </div>

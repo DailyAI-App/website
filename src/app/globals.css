@@ -413,6 +413,27 @@ a { color: inherit; }
 .roadmap-node-done .roadmap-node-circle { background: var(--accent); border-color: var(--accent); color: #fff; }
 .roadmap-node-title { color: var(--title); font-size: 13px; line-height: 1.5; }
 .roadmap-node-done .roadmap-node-title { color: var(--muted); text-decoration: line-through; }
+.roadmap-node-row { align-items: center; display: flex; gap: 8px; }
+.roadmap-node-row .roadmap-node-btn { flex: 1; }
+.roadmap-node-toggle {
+  background: none;
+  border: 0;
+  color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 4px;
+}
+.roadmap-node-detail {
+  background: var(--card-raised);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 0 0 14px 46px;
+  padding: 12px 14px;
+}
 
 /* ---- trainer ---- */
 

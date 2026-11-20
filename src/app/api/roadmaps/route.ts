@@ -19,7 +19,7 @@ async function listRoadmaps(userId: string) {
     id: r.id,
     company: r.company,
     createdAt: r.createdAt,
-    steps: steps.filter((s) => s.roadmapId === r.id).map((s) => ({ id: s.id, title: s.title, done: s.done })),
+    steps: steps.filter((s) => s.roadmapId === r.id).map((s) => ({ id: s.id, title: s.title, detail: s.detail, done: s.done })),
   }));
 }
 
@@ -30,25 +30,41 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ roadmaps: await listRoadmaps(userId) });
 }
 
+type StepInput = { title: string; detail?: string };
+
+// accepts either the old plain-string steps or the newer {title, detail}
+// shape, so older saved clients still work.
+function normalizeSteps(raw: unknown): StepInput[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item): StepInput | null => {
+      if (typeof item === "string") return item.trim() ? { title: item.trim() } : null;
+      if (item && typeof item === "object" && typeof (item as { title?: unknown }).title === "string") {
+        const title = (item as { title: string }).title.trim();
+        if (!title) return null;
+        const detail = (item as { detail?: unknown }).detail;
+        return { title, detail: typeof detail === "string" ? detail.trim() : undefined };
+      }
+      return null;
+    })
+    .filter((s): s is StepInput => s !== null);
+}
+
 export async function POST(req: NextRequest) {
   const userId = await resolveUserId(req);
   if (!userId) return NextResponse.json({ error: "로그인이 필요해요." }, { status: 401 });
 
   const body = await req.json();
   const company: unknown = body?.company;
-  const steps: unknown = body?.steps;
-  if (typeof company !== "string" || !company.trim() || !Array.isArray(steps) || steps.length === 0) {
+  const steps = normalizeSteps(body?.steps);
+  if (typeof company !== "string" || !company.trim() || steps.length === 0) {
     return NextResponse.json({ error: "company와 steps가 필요해요." }, { status: 400 });
-  }
-  const stepTitles = steps.filter((s): s is string => typeof s === "string" && s.trim().length > 0);
-  if (stepTitles.length === 0) {
-    return NextResponse.json({ error: "steps에 유효한 항목이 없어요." }, { status: 400 });
   }
 
   const db = getDb();
   const [roadmap] = await db.insert(roadmaps).values({ userId, company: company.trim() }).returning();
   await db.insert(roadmapSteps).values(
-    stepTitles.map((title, i) => ({ roadmapId: roadmap.id, title, position: i })),
+    steps.map((step, i) => ({ roadmapId: roadmap.id, title: step.title, detail: step.detail || null, position: i })),
   );
 
   return NextResponse.json({ roadmaps: await listRoadmaps(userId) });
