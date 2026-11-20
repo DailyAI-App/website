@@ -4,6 +4,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/db";
 import { roadmapSteps, roadmaps } from "@/db/schema";
 
+function parseTopics(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 async function listRoadmaps(userId: string) {
   const db = getDb();
   const rows = await db.select().from(roadmaps).where(eq(roadmaps.userId, userId)).orderBy(desc(roadmaps.createdAt));
@@ -19,7 +29,7 @@ async function listRoadmaps(userId: string) {
     id: r.id,
     company: r.company,
     createdAt: r.createdAt,
-    steps: steps.filter((s) => s.roadmapId === r.id).map((s) => ({ id: s.id, title: s.title, detail: s.detail, done: s.done })),
+    steps: steps.filter((s) => s.roadmapId === r.id).map((s) => ({ id: s.id, title: s.title, detail: s.detail, topics: parseTopics(s.topics), done: s.done })),
   }));
 }
 

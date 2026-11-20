@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-type RoadmapStep = { id: string; title: string; detail: string | null; done: boolean };
+type RoadmapStep = { id: string; title: string; detail: string | null; topics: string[]; done: boolean };
 type Roadmap = { id: string; company: string; createdAt: string; steps: RoadmapStep[] };
 
 async function fetchJSON(url: string, init?: RequestInit): Promise<{ roadmaps: Roadmap[] }> {
@@ -75,6 +75,11 @@ export default function RoadmapPage() {
   if (active) {
     const doneCount = active.steps.filter((s) => s.done).length;
     const progress = active.steps.length > 0 ? Math.round((doneCount / active.steps.length) * 100) : 0;
+    // the first not-yet-done step is "current" — like a Duolingo lesson
+    // path, it glows; steps after it look "not reached yet" but can still
+    // be toggled directly (this is a flexible checklist, not a hard gate).
+    const currentIndex = active.steps.findIndex((s) => !s.done);
+
     return (
       <div className="page-shell">
         <button type="button" className="link-back" onClick={() => setActiveId(null)}>‹ 목록으로</button>
@@ -91,20 +96,34 @@ export default function RoadmapPage() {
           <ol className="roadmap-path">
             {active.steps.map((step, i) => {
               const isExpanded = expandedStepId === step.id;
+              const isCurrent = i === currentIndex;
+              const stateClass = step.done ? "roadmap-node-done" : isCurrent ? "roadmap-node-current" : "roadmap-node-locked";
               return (
-                <li key={step.id} className={step.done ? "roadmap-node roadmap-node-done" : "roadmap-node"}>
-                  <div className="roadmap-node-row">
-                    <button type="button" className="roadmap-node-btn" onClick={() => void handleToggleStep(active.id, step.id)}>
+                <li key={step.id} className={`roadmap-node ${stateClass}`}>
+                  <div className="roadmap-node-card">
+                    <button type="button" className="roadmap-node-circle-btn" onClick={() => void handleToggleStep(active.id, step.id)}>
                       <span className="roadmap-node-circle">{step.done ? "✓" : i + 1}</span>
-                      <span className="roadmap-node-title">{step.title}</span>
                     </button>
-                    {step.detail && (
-                      <button type="button" className="roadmap-node-toggle" onClick={() => setExpandedStepId(isExpanded ? null : step.id)}>
-                        {isExpanded ? "접기" : "자세히"}
+                    <div className="roadmap-node-body">
+                      <button type="button" className="roadmap-node-head" onClick={() => void handleToggleStep(active.id, step.id)}>
+                        <span className="roadmap-node-title">{step.title}</span>
+                        {isCurrent && <span className="roadmap-node-badge">지금</span>}
                       </button>
-                    )}
+                      {step.topics.length > 0 && (
+                        <div className="roadmap-node-topics">
+                          {step.topics.map((topic) => (
+                            <span key={topic} className="roadmap-node-topic">{topic}</span>
+                          ))}
+                        </div>
+                      )}
+                      {step.detail && (
+                        <button type="button" className="roadmap-node-toggle" onClick={() => setExpandedStepId(isExpanded ? null : step.id)}>
+                          {isExpanded ? "접기" : "자세히"}
+                        </button>
+                      )}
+                      {isExpanded && step.detail && <p className="roadmap-node-detail">{step.detail}</p>}
+                    </div>
                   </div>
-                  {isExpanded && step.detail && <p className="roadmap-node-detail">{step.detail}</p>}
                 </li>
               );
             })}

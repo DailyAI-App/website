@@ -4,6 +4,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/db";
 import { roadmapSteps, roadmaps } from "@/db/schema";
 
+function parseTopics(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 async function listRoadmaps(userId: string) {
   const db = getDb();
   const rows = await db.select().from(roadmaps).where(eq(roadmaps.userId, userId)).orderBy(desc(roadmaps.createdAt));
@@ -19,7 +29,7 @@ async function listRoadmaps(userId: string) {
     id: r.id,
     company: r.company,
     createdAt: r.createdAt,
-    steps: steps.filter((s) => s.roadmapId === r.id).map((s) => ({ id: s.id, title: s.title, detail: s.detail, done: s.done })),
+    steps: steps.filter((s) => s.roadmapId === r.id).map((s) => ({ id: s.id, title: s.title, detail: s.detail, topics: parseTopics(s.topics), done: s.done })),
   }));
 }
 
@@ -30,9 +40,9 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ roadmaps: await listRoadmaps(userId) });
 }
 
-type StepInput = { title: string; detail?: string };
+type StepInput = { title: string; detail?: string; topics?: string[] };
 
-// accepts either the old plain-string steps or the newer {title, detail}
+// accepts the old plain-string steps or the newer {title, detail, topics}
 // shape, so older saved clients still work.
 function normalizeSteps(raw: unknown): StepInput[] {
   if (!Array.isArray(raw)) return [];
@@ -43,7 +53,9 @@ function normalizeSteps(raw: unknown): StepInput[] {
         const title = (item as { title: string }).title.trim();
         if (!title) return null;
         const detail = (item as { detail?: unknown }).detail;
-        return { title, detail: typeof detail === "string" ? detail.trim() : undefined };
+        const topicsRaw = (item as { topics?: unknown }).topics;
+        const topics = Array.isArray(topicsRaw) ? topicsRaw.filter((t): t is string => typeof t === "string" && t.trim().length > 0) : undefined;
+        return { title, detail: typeof detail === "string" ? detail.trim() : undefined, topics };
       }
       return null;
     })
@@ -64,7 +76,13 @@ export async function POST(req: NextRequest) {
   const db = getDb();
   const [roadmap] = await db.insert(roadmaps).values({ userId, company: company.trim() }).returning();
   await db.insert(roadmapSteps).values(
-    steps.map((step, i) => ({ roadmapId: roadmap.id, title: step.title, detail: step.detail || null, position: i })),
+    steps.map((step, i) => ({
+      roadmapId: roadmap.id,
+      title: step.title,
+      detail: step.detail || null,
+      topics: step.topics && step.topics.length > 0 ? JSON.stringify(step.topics) : null,
+      position: i,
+    })),
   );
 
   return NextResponse.json({ roadmaps: await listRoadmaps(userId) });

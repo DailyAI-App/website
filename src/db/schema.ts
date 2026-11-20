@@ -20,9 +20,12 @@ export const roadmapSteps = pgTable("roadmap_steps", {
   id: uuid("id").primaryKey().defaultRandom(),
   roadmapId: uuid("roadmap_id").notNull().references(() => roadmaps.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
-  // what to actually study for this step (roadmap.sh-style) — concrete
-  // sub-topics/tools/concepts, not just the one-line title.
+  // what to actually study for this step (roadmap.sh-style) — a short
+  // prose explanation...
   detail: text("detail"),
+  // ...plus the concrete named sub-topics/tools (JSON string[]), rendered
+  // as their own small boxes under the step, same as roadmap.sh.
+  topics: text("topics"),
   done: boolean("done").notNull().default(false),
   position: integer("position").notNull(),
 });
