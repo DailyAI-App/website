@@ -6,19 +6,30 @@ const MODEL = "claude-sonnet-5";
 
 export type GatewayMessage = { role: "system" | "user" | "assistant"; content: string };
 
-export async function askGateway(messages: GatewayMessage[]): Promise<string> {
+async function callGateway(model: string, messages: GatewayMessage[]): Promise<{ reply: string; citations: string[] }> {
   const apiKey = process.env.GATEWAY_API_KEY;
   if (!apiKey) throw new Error("GATEWAY_API_KEY missing");
 
   const response = await fetch(GATEWAY_URL, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-    body: JSON.stringify({ model: MODEL, messages }),
+    body: JSON.stringify({ model, messages }),
   });
   if (!response.ok) throw new Error(`게이트웨이 요청이 실패했어요 (${response.status}).`);
 
   const data = await response.json();
   const reply: string = data?.choices?.[0]?.message?.content ?? "";
   if (!reply) throw new Error("응답을 받지 못했어요.");
-  return reply;
+  const citations: string[] = Array.isArray(data?.citations) ? data.citations.filter((c: unknown) => typeof c === "string") : [];
+  return { reply, citations };
+}
+
+export async function askGateway(messages: GatewayMessage[]): Promise<string> {
+  return (await callGateway(MODEL, messages)).reply;
+}
+
+// for search-grounded models (e.g. "sonar-pro") that return citations
+// alongside the reply.
+export async function askGatewayWithModel(model: string, messages: GatewayMessage[]): Promise<{ reply: string; citations: string[] }> {
+  return callGateway(model, messages);
 }
