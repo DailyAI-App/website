@@ -1,5 +1,8 @@
 const GATEWAY_URL = "https://factchat.mindlogic-kr-api.com/v1/gateway/chat/completions/";
-const MODEL = "gemini-3.8-flash";
+// gemini-3.8-flash (small/fast tier) wasn't reliably following the
+// "don't repeat this question" instruction on short documents — Claude
+// Sonnet 5 follows instructions far more consistently for this.
+const MODEL = "claude-sonnet-5";
 
 export type GatewayMessage = { role: "system" | "user" | "assistant"; content: string };
 
