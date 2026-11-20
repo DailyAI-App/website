@@ -6,9 +6,26 @@ import { fetchStudy, formatMinutes, saveStudySession, type StudyData } from "@/l
 import { fetchPostureStats } from "@/lib/posture";
 
 const PRESENCE_POLL_MS = 5_000;
+const FOCUS_SESSION_KEY = "dailyai.focusSession";
+const MIN_SAVED_MINUTES = 1;
 
 function formatTimer(seconds: number): string {
   return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+// the timer's source of truth is a wall-clock start time, not an
+// accumulated tick count — navigating to another page and back (or a
+// throttled background tab) unmounts this component, and a tick counter
+// would silently reset to 0 and look "frozen" instead of catching up.
+function loadPersistedStart(): number | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(FOCUS_SESSION_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return typeof parsed?.startedAt === "number" ? parsed.startedAt : null;
+  } catch {
+    return null;
+  }
 }
 
 export default function TodayPage() {
@@ -18,16 +35,30 @@ export default function TodayPage() {
   const [running, setRunning] = useState(false);
   const [livePresence, setLivePresence] = useState<number | null>(null);
 
-  const sessionStartRef = useRef<number | null>(null);
+  const startedAtRef = useRef<number | null>(null);
   const presenceSamplesRef = useRef<number[]>([]);
 
   useEffect(() => {
     fetchStudy().then(setData).catch((err) => setError(err instanceof Error ? err.message : "학습 데이터를 불러오지 못했어요."));
   }, []);
 
+  // resume a focus session that was already running before navigating away.
+  useEffect(() => {
+    const startedAt = loadPersistedStart();
+    if (startedAt == null) return;
+    startedAtRef.current = startedAt;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+    setRunning(true);
+  }, []);
+
   useEffect(() => {
     if (!running) return;
-    const timer = window.setInterval(() => setSeconds((value) => value + 1), 1000);
+    const tick = () => {
+      if (startedAtRef.current != null) setSeconds(Math.floor((Date.now() - startedAtRef.current) / 1000));
+    };
+    tick();
+    const timer = window.setInterval(tick, 1000);
     return () => window.clearInterval(timer);
   }, [running]);
 
@@ -39,7 +70,7 @@ export default function TodayPage() {
     async function poll() {
       try {
         const stats = await fetchPostureStats();
-        const start = sessionStartRef.current ?? Date.now();
+        const start = startedAtRef.current ?? Date.now();
         const inWindow = stats.samples.filter((sample) => sample.capturedAt >= start);
         if (inWindow.length === 0) return;
         presenceSamplesRef.current = inWindow.map((sample) => sample.score);
@@ -54,22 +85,38 @@ export default function TodayPage() {
   }, [running]);
 
   function startSession() {
-    sessionStartRef.current = Date.now();
+    const startedAt = Date.now();
+    startedAtRef.current = startedAt;
     presenceSamplesRef.current = [];
     setLivePresence(null);
     setSeconds(0);
     setRunning(true);
+    window.localStorage.setItem(FOCUS_SESSION_KEY, JSON.stringify({ startedAt }));
+  }
+
+  function resetTimer() {
+    const startedAt = Date.now();
+    startedAtRef.current = startedAt;
+    setSeconds(0);
+    window.localStorage.setItem(FOCUS_SESSION_KEY, JSON.stringify({ startedAt }));
   }
 
   async function finishSession() {
     setRunning(false);
-    const minutes = Math.max(1, Math.round(seconds / 60));
+    const elapsedSeconds = startedAtRef.current != null ? Math.floor((Date.now() - startedAtRef.current) / 1000) : seconds;
+    window.localStorage.removeItem(FOCUS_SESSION_KEY);
+    setSeconds(0);
+
+    // a session under 30s rounds to 0 minutes — don't inflate it to a fake
+    // "1분" of study, just drop it.
+    const minutes = Math.round(elapsedSeconds / 60);
+    if (minutes < MIN_SAVED_MINUTES) return;
+
     const samples = presenceSamplesRef.current;
     const averagePresence = samples.length > 0 ? Math.round((samples.reduce((a, b) => a + b, 0) / samples.length) * 10) / 10 : null;
     try {
-      const next = await saveStudySession(minutes, seconds >= 20 * 60 ? "steady" : "short", averagePresence);
+      const next = await saveStudySession(minutes, elapsedSeconds >= 20 * 60 ? "steady" : "short", averagePresence);
       setData(next);
-      setSeconds(0);
     } catch (err) {
       setError(err instanceof Error ? err.message : "학습 세션을 저장하지 못했어요.");
     }
@@ -113,7 +160,7 @@ export default function TodayPage() {
             {!running
               ? <button type="button" className="btn-primary" onClick={startSession}>집중 시작</button>
               : <button type="button" className="btn-primary" onClick={() => void finishSession()}>세션 저장</button>}
-            {running && <button type="button" className="chip" onClick={() => setSeconds(0)}>타이머 초기화</button>}
+            {running && <button type="button" className="chip" onClick={resetTimer}>타이머 초기화</button>}
           </div>
         </div>
 
