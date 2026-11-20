@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 
-type RoadmapStep = { id: string; title: string; detail: string | null; topics: string[]; done: boolean };
+type RoadmapTopic = { name: string; done: boolean };
+type RoadmapStep = { id: string; title: string; detail: string | null; topics: RoadmapTopic[]; done: boolean };
 type Roadmap = { id: string; company: string; role: string | null; createdAt: string; steps: RoadmapStep[] };
 
 async function fetchJSON(url: string, init?: RequestInit): Promise<{ roadmaps: Roadmap[] }> {
@@ -73,6 +74,15 @@ export default function RoadmapPage() {
     setRoadmaps(data.roadmaps);
   }
 
+  async function handleToggleTopic(roadmapId: string, stepId: string, topicIndex: number) {
+    const data = await fetchJSON(`/api/roadmaps/${roadmapId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ stepId, topicIndex }),
+    });
+    setRoadmaps(data.roadmaps);
+  }
+
   const active = roadmaps.find((r) => r.id === activeId) ?? null;
 
   if (active) {
@@ -126,8 +136,15 @@ export default function RoadmapPage() {
                     <div className="roadmap-map-branch">
                       <span className="roadmap-map-branch-line" />
                       <div className="roadmap-map-branch-topics">
-                        {step.topics.map((topic) => (
-                          <span key={topic} className="roadmap-map-topic">{topic}</span>
+                        {step.topics.map((topic, topicIndex) => (
+                          <button
+                            key={topic.name}
+                            type="button"
+                            className={topic.done ? "roadmap-map-topic roadmap-map-topic-done" : "roadmap-map-topic"}
+                            onClick={() => void handleToggleTopic(active.id, step.id, topicIndex)}
+                          >
+                            {topic.done ? "✓ " : ""}{topic.name}
+                          </button>
                         ))}
                       </div>
                     </div>

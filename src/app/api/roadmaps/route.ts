@@ -4,11 +4,25 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/db";
 import { roadmapSteps, roadmaps } from "@/db/schema";
 
-function parseTopics(raw: string | null): string[] {
+type Topic = { name: string; done: boolean };
+
+// topics were originally saved as plain strings; normalize both that and
+// the newer {name, done} shape so individually checking a topic off works
+// regardless of when the roadmap was created.
+function parseTopics(raw: string | null): Topic[] {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === "string") : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item): Topic | null => {
+        if (typeof item === "string") return item.trim() ? { name: item.trim(), done: false } : null;
+        if (item && typeof item === "object" && typeof item.name === "string" && item.name.trim()) {
+          return { name: item.name.trim(), done: item.done === true };
+        }
+        return null;
+      })
+      .filter((t): t is Topic => t !== null);
   } catch {
     return [];
   }
@@ -85,7 +99,7 @@ export async function POST(req: NextRequest) {
       roadmapId: roadmap.id,
       title: step.title,
       detail: step.detail || null,
-      topics: step.topics && step.topics.length > 0 ? JSON.stringify(step.topics) : null,
+      topics: step.topics && step.topics.length > 0 ? JSON.stringify(step.topics.map((name) => ({ name, done: false }))) : null,
       position: i,
     })),
   );
