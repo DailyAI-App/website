@@ -48,12 +48,13 @@ export default function StudyPage() {
   const [quizError, setQuizError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // extracted once on the first question, then reused — re-parsing the same
-  // PDF/PPTX on every question was the main source of slow generation.
+  // extracted once per "생성" click, then reused on restart — re-parsing the
+  // same PDF/PPTX every time was the main source of slow generation.
   const lectureTextRef = useRef<string | null>(null);
-  // every prompt asked so far this session, sent back to the model so it
-  // doesn't repeat the same question (confirmed happening on short docs).
-  const askedPromptsRef = useRef<string[]>([]);
+  // the whole quiz is generated in one batch call up front — "다음 문제" is
+  // then just stepping through this array, with no network wait and nothing
+  // stale left on screen to answer while a question "loads".
+  const quizQuestionsRef = useRef<Question[]>([]);
 
   const [selectedOx, setSelectedOx] = useState<boolean | null>(null);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
@@ -106,12 +107,9 @@ export default function StudyPage() {
     }
   }
 
-  // --- quiz session: upload kicks it off automatically, no type/count picking required ---
-
-  function nextTypeFor(num: number): QuestionType {
-    if (typeMode !== "mix") return typeMode;
-    return AUTO_MIX[(num - 1) % AUTO_MIX.length];
-  }
+  // --- quiz session: the whole quiz is generated in one batch call up
+  // front, so "다음 문제" is instant — no per-question network wait, and
+  // nothing stale left on screen to answer while a question "loads". ---
 
   function resetAnswerState() {
     setSelectedOx(null);
@@ -122,38 +120,50 @@ export default function StudyPage() {
     setGuess("");
   }
 
-  function promptTextOf(q: Question): string {
-    if (q.type === "ox") return q.statement;
-    if (q.type === "mcq") return q.question;
-    if (q.type === "fill_blank") return q.sentence;
-    return q.explanation;
+  async function fetchQuiz(input: { text?: string; file?: File }): Promise<{ questions: Question[]; sourceText?: string }> {
+    const body = new FormData();
+    if (input.text) body.set("text", input.text);
+    else if (input.file) body.set("file", input.file);
+    body.set("typeMode", typeMode);
+    body.set("questionCount", String(questionCount));
+    const res = await fetch("/api/trainer", { method: "POST", body });
+    const payload = await res.json();
+    if (!res.ok) throw new Error(payload?.error ?? "문제를 만들지 못했어요.");
+    return payload;
   }
 
-  async function generateQuestion(num: number, targetFile?: File) {
-    const cachedText = lectureTextRef.current;
-    const useFile = targetFile ?? file;
-    if (!cachedText && !useFile) return;
-    setQuizLoading(true);
-    setQuizError(null);
-    // clear the previous question immediately — leaving it rendered while
-    // the next one loads let you answer the stale question a second time
-    // right before it swapped out from under you.
+  // one "생성"/"다시 시작" click = one chapter in 오답노트: create the
+  // session row up front so every mistake logged during this run groups
+  // under it, then fetch the whole quiz in one shot.
+  async function startQuizRun(sourceName: string, input: { text?: string; file?: File }) {
     setQuestion(null);
+    setQuestionNumber(0);
+    setCompletedCount(0);
+    setSessionComplete(false);
+    setQuizError(null);
+    setQuizSessionId(null);
     resetAnswerState();
+
     try {
-      const body = new FormData();
-      // after the first question, reuse the already-extracted text instead
-      // of re-uploading + re-parsing the same file every time.
-      if (cachedText) body.set("text", cachedText);
-      else body.set("file", useFile as File);
-      body.set("type", nextTypeFor(num));
-      body.set("exclude", JSON.stringify(askedPromptsRef.current));
-      const res = await fetch("/api/trainer", { method: "POST", body });
+      const res = await fetch("/api/trainer/sessions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sourceName, questionCount }),
+      });
       const payload = await res.json();
-      if (!res.ok) throw new Error(payload?.error ?? "문제를 만들지 못했어요.");
-      if (typeof payload.sourceText === "string") lectureTextRef.current = payload.sourceText;
-      setQuestion(payload);
-      askedPromptsRef.current = [...askedPromptsRef.current, promptTextOf(payload)];
+      if (res.ok) setQuizSessionId(payload.id);
+    } catch {
+      // mistakes still log without a chapter if this fails
+    }
+
+    setQuizLoading(true);
+    try {
+      const { questions, sourceText } = await fetchQuiz(input);
+      if (sourceText) lectureTextRef.current = sourceText;
+      if (questions.length === 0) throw new Error("문제를 만들지 못했어요. 다시 시도해주세요.");
+      quizQuestionsRef.current = questions;
+      setQuestionNumber(1);
+      setQuestion(questions[0]);
     } catch (err) {
       setQuizError(err instanceof Error ? err.message : "알 수 없는 오류가 발생했어요.");
     } finally {
@@ -161,37 +171,31 @@ export default function StudyPage() {
     }
   }
 
-  // one "생성" click = one chapter in 오답노트: create the session row up
-  // front so every mistake logged during this run can be grouped under it.
   async function handleFileChange(selected: File | null) {
     setFile(selected);
-    setQuestion(null);
-    setQuestionNumber(0);
-    setCompletedCount(0);
-    setSessionComplete(false);
-    setQuizError(null);
-    setQuizSessionId(null);
     lectureTextRef.current = null;
-    askedPromptsRef.current = [];
-    resetAnswerState();
-    if (!selected) return;
-    // the whole point is "upload it and it just starts" — no extra click.
-    setQuestionNumber(1);
-    try {
-      const res = await fetch("/api/trainer/sessions", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sourceName: selected.name, questionCount }),
-      });
-      const payload = await res.json();
-      if (res.ok) setQuizSessionId(payload.id);
-    } catch {
-      // mistakes still log without a chapter if this fails
+    quizQuestionsRef.current = [];
+    if (!selected) {
+      setQuestion(null);
+      setQuestionNumber(0);
+      setCompletedCount(0);
+      setSessionComplete(false);
+      setQuizError(null);
+      resetAnswerState();
+      return;
     }
-    await generateQuestion(1, selected);
+    // the whole point is "upload it and it just starts" — no extra click.
+    await startQuizRun(selected.name, { file: selected });
   }
 
-  async function handleNextQuestion() {
+  // same material, fresh chapter — reuse the cached text so this doesn't
+  // re-upload or re-parse the file.
+  function restartSameMaterial() {
+    const cachedText = lectureTextRef.current;
+    void startQuizRun(file?.name ?? "강의 자료", cachedText ? { text: cachedText } : { file: file ?? undefined });
+  }
+
+  function handleNextQuestion() {
     if (retryQueue) {
       const next = retryIndex + 1;
       if (next >= retryQueue.length) {
@@ -213,7 +217,8 @@ export default function StudyPage() {
     }
     const next = questionNumber + 1;
     setQuestionNumber(next);
-    await generateQuestion(next);
+    setQuestion(quizQuestionsRef.current[next - 1] ?? null);
+    resetAnswerState();
   }
 
   const isLastQuestion = retryQueue ? retryIndex >= retryQueue.length - 1 : questionNumber === questionCount;
@@ -589,15 +594,6 @@ export default function StudyPage() {
         )}
         {quizError && <p className="assistant-error">{quizError}</p>}
 
-        {/* between questions: the old question is cleared immediately on
-            "다음 문제", so this fills the gap instead of leaving a stale,
-            still-answerable question on screen while the next one loads. */}
-        {quizLoading && !question && questionNumber > 0 && !sessionComplete && (
-          <div className="trainer-card">
-            <p className="chat-empty-text">다음 문제를 만들고 있어요…</p>
-          </div>
-        )}
-
         {showSettings && questionNumber === 0 && !retryQueue && (
           <div className="study-settings">
             <div className="control-group">
@@ -637,7 +633,7 @@ export default function StudyPage() {
             <h3>{questionCount}문제를 모두 풀었어요.</h3>
             <p>오답은 오답노트에 저장돼 있어요.</p>
             <div className="trainer-control-actions">
-              <button type="button" className="btn-primary" onClick={() => { setQuestionNumber(1); void generateQuestion(1); }}>
+              <button type="button" className="btn-primary" onClick={restartSameMaterial}>
                 같은 자료로 다시 시작
               </button>
               <button type="button" className="chip" onClick={() => void openNotebook()}>오답노트 보기</button>

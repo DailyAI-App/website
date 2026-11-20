@@ -5,15 +5,23 @@ import { askGateway } from "@/lib/gateway";
 
 const QUESTION_TYPES = ["ox", "mcq", "fill_blank", "descriptive"] as const;
 type QuestionType = (typeof QUESTION_TYPES)[number];
+const AUTO_MIX: QuestionType[] = ["mcq", "ox", "fill_blank", "descriptive"];
 
-const SYSTEM_PROMPTS: Record<QuestionType, string> = {
+const SCHEMA_BY_TYPE: Record<QuestionType, string> = {
+  ox: `{"type":"ox","statement":"참/거짓을 판단할 문장 (헷갈릴 수 있는 디테일 포함, 정답은 명확해야 함)","isTrue":true 또는 false,"explanation":"왜 참/거짓인지 한두 문장"}`,
+  mcq: `{"type":"mcq","question":"문제","options":["보기1","보기2","보기3","보기4"],"correctIndex":0부터 3 사이 정답 인덱스,"explanation":"정답 이유"}`,
+  fill_blank: `{"type":"fill_blank","sentence":"정확히 \\"____\\" 네 글자 빈칸이 포함된 문장","answer":"빈칸에 들어갈 정답","explanation":"설명"}`,
+  descriptive: `{"type":"descriptive","explanation":"그럴듯하지만 미묘하게 틀린 부분이 정확히 하나 섞인 4~6문장 설명","flaw":"어느 문장이 왜 틀렸는지","correction":"올바르게 고친 설명"}`,
+};
+
+const SINGLE_SYSTEM_PROMPTS: Record<QuestionType, string> = {
   ox: `너는 학습자의 개념 이해를 점검하는 선생님이야. 아래는 강의 자료에서 가져온 내용이야.
 이 내용을 바탕으로 참/거짓을 판단할 수 있는 문장을 하나 만들어줘. 문장은 헷갈릴 수 있는 디테일을
 포함해서, 대충 읽으면 반대로 판단하기 쉽게 만들어줘. 강의 자료에 명시적으로 나온 사실에만 근거해서,
 정답이 참인지 거짓인지 애매하지 않고 명확하게 판단되도록 만들어줘.
 
 다른 설명 없이 아래 형식의 JSON 객체로만 답해:
-{"statement": "참/거짓을 판단할 문장", "isTrue": true 또는 false, "explanation": "왜 참/거짓인지 한두 문장"}`,
+${SCHEMA_BY_TYPE.ox}`,
 
   mcq: `너는 학습자의 개념 이해를 점검하는 선생님이야. 아래는 강의 자료에서 가져온 내용이야.
 이 내용을 바탕으로 4지선다 객관식 문제를 하나 만들어줘. 보기 4개는 서로 완전히 달라야 하고,
@@ -21,14 +29,14 @@ const SYSTEM_PROMPTS: Record<QuestionType, string> = {
 정답이 둘 이상처럼 보이거나 애매한 보기는 만들지 마.
 
 다른 설명 없이 아래 형식의 JSON 객체로만 답해:
-{"question": "문제", "options": ["보기1", "보기2", "보기3", "보기4"], "correctIndex": 0부터 3 사이 정답 인덱스, "explanation": "정답 이유"}`,
+${SCHEMA_BY_TYPE.mcq}`,
 
   fill_blank: `너는 학습자의 개념 이해를 점검하는 선생님이야. 아래는 강의 자료에서 가져온 내용이야.
 이 내용에서 핵심 용어나 개념 하나를 빈칸으로 비운 문장을 하나 만들어줘. 빈칸은 정확히 "____"
 네 글자로 표시해. 정답은 강의 자료에 등장하는 단어나 짧은 구로, 모호하지 않게 하나로 정해져야 해.
 
 다른 설명 없이 아래 형식의 JSON 객체로만 답해:
-{"sentence": "____가 포함된 문장", "answer": "빈칸에 들어갈 정답", "explanation": "설명"}`,
+${SCHEMA_BY_TYPE.fill_blank}`,
 
   descriptive: `너는 학습자의 오류 탐지 능력을 훈련시키는 선생님이야. 아래는 강의 자료에서 가져온 내용이야.
 이 내용과 관련된 개념 하나를 골라서, 그럴듯하지만 미묘하게 틀린 설명을 만들어줘. 오류는 눈에 바로 띄면 안 되고,
@@ -36,12 +44,14 @@ const SYSTEM_PROMPTS: Record<QuestionType, string> = {
 설명은 4~6문장으로, 그 안에 정확히 하나의 틀린 부분만 있어야 해.
 
 다른 설명 없이 아래 형식의 JSON 객체로만 답해:
-{"explanation": "틀린 부분이 섞인 설명 전체", "flaw": "어느 문장이 왜 틀렸는지", "correction": "올바르게 고친 설명"}`,
+${SCHEMA_BY_TYPE.descriptive}`,
 };
 
 const MAX_EXCERPT_LENGTH = 4000;
 const MAX_EXCLUDE_ITEMS = 20;
-const MAX_GENERATE_ATTEMPTS = 4;
+const MAX_SINGLE_ATTEMPTS = 4;
+const MAX_BATCH_ATTEMPTS = 2;
+const MAX_QUESTIONS = 30;
 
 function normalize(text: string): string {
   return text.replace(/\s+/g, "").toLowerCase();
@@ -60,21 +70,17 @@ function pickExcerpt(text: string): string {
   return text.slice(start, start + MAX_EXCERPT_LENGTH);
 }
 
-// steers the model away from the exact repeats seen in production (same
-// short document -> same obvious question every time) — the excerpt alone
-// doesn't vary enough on short documents to prevent this.
 function excludeNote(exclude: string[]): string {
   if (exclude.length === 0) return "";
   const trimmed = exclude.slice(-MAX_EXCLUDE_ITEMS);
-  return `\n\n아래는 이미 이번 세션에서 출제한 문제들이야. 같은 내용이나 표현으로 다시 만들지 말고,
+  return `\n\n아래는 이미 출제한 문제들이야. 같은 내용이나 표현으로 다시 만들지 말고,
 아직 다루지 않은 다른 부분이나 다른 각도에서 새 문제를 만들어줘:\n${trimmed.map((p, i) => `${i + 1}. ${p}`).join("\n")}`;
 }
 
-function parseJSON(reply: string): Record<string, unknown> | null {
+function parseJSON(reply: string): unknown {
   const jsonText = reply.trim().replace(/^```(json)?/i, "").replace(/```$/, "").trim();
   try {
-    const parsed = JSON.parse(jsonText);
-    return parsed && typeof parsed === "object" ? parsed : null;
+    return JSON.parse(jsonText);
   } catch {
     return null;
   }
@@ -118,35 +124,112 @@ function buildQuestion(type: QuestionType, parsed: Record<string, unknown>): Rec
   return { type, explanation: parsed.explanation, flaw: parsed.flaw, correction: parsed.correction };
 }
 
+// single-question generator, used only to patch individual slots the batch
+// call couldn't fill validly — same exact-duplicate guard as the batch path.
 async function generateOne(type: QuestionType, fullText: string, exclude: string[]): Promise<Record<string, unknown> | null> {
   const normalizedExclude = exclude.map(normalize);
   let lastValid: Record<string, unknown> | null = null;
 
-  for (let attempt = 0; attempt < MAX_GENERATE_ATTEMPTS; attempt++) {
+  for (let attempt = 0; attempt < MAX_SINGLE_ATTEMPTS; attempt++) {
     let reply: string;
     try {
       reply = await askGateway([
-        { role: "system", content: SYSTEM_PROMPTS[type] + excludeNote(exclude) },
+        { role: "system", content: SINGLE_SYSTEM_PROMPTS[type] + excludeNote(exclude) },
         { role: "user", content: `강의 자료 내용:\n${pickExcerpt(fullText)}` },
       ]);
     } catch {
       continue;
     }
     const parsed = parseJSON(reply);
-    const question = parsed && buildQuestion(type, parsed);
+    const question = parsed && typeof parsed === "object" ? buildQuestion(type, parsed as Record<string, unknown>) : null;
     if (!question) continue;
     lastValid = question;
-
-    // the "don't repeat these" instruction isn't reliably honored on short
-    // source documents (confirmed: the same OX/fill-blank repeated 3x on a
-    // one-page PDF) — reject exact repeats here instead of just asking nicely.
     if (!normalizedExclude.includes(normalize(promptSignature(type, question)))) return question;
   }
 
   // ponytail: a short/narrow document can run out of unique angles for a
-  // type faster than the quiz needs questions — serving one repeat beats
-  // hard-failing the whole quiz after exhausting retries.
+  // type — serving one repeat beats hard-failing the whole quiz.
   return lastValid;
+}
+
+function buildBatchPrompt(plan: QuestionType[]): string {
+  const slots = plan.map((t, i) => `${i + 1}번 (${t} 유형): ${SCHEMA_BY_TYPE[t]}`).join("\n");
+  return `너는 학습자의 개념 이해를 점검하는 선생님이야. 아래는 강의 자료에서 가져온 전체 내용이야.
+이 내용을 바탕으로 정확히 ${plan.length}개의 문제를 만들어줘. 각 번호의 문제 유형과 JSON 형식은 다음과 같아:
+${slots}
+
+- ox 문제는 헷갈릴 수 있는 디테일을 포함해서 대충 읽으면 반대로 판단하기 쉽게 만들고, 정답은 명확해야 해.
+- mcq 문제는 보기 4개가 서로 완전히 다르고, 오답 3개는 그럴듯하지만 명확히 틀리고, 정답 1개만 확실해야 해.
+- fill_blank 문제는 빈칸을 정확히 "____" 네 글자로 표시하고 정답이 하나로 명확해야 해.
+- descriptive 문제는 그럴듯하지만 미묘하게 틀린 부분이 정확히 하나 섞인 4~6문장 설명이어야 해.
+
+아주 중요: ${plan.length}개의 문제는 서로 완전히 다른 내용과 다른 문장을 다뤄야 해. 강의 자료의 여러
+다른 부분을 골고루 활용해서, 같은 개념을 두 번 묻더라도 절대 같은 문장이나 표현을 반복하지 마.
+
+다른 설명이나 마크다운 없이, 정확히 ${plan.length}개의 원소를 가진 JSON 배열로만 답해. 각 원소는 위에서
+지정한 번호의 유형과 형식을 그대로 따르고, "type" 필드를 반드시 포함해:
+[{...}, {...}, ...]`;
+}
+
+async function generateBatch(plan: QuestionType[], fullText: string): Promise<Record<string, unknown>[] | null> {
+  for (let attempt = 0; attempt < MAX_BATCH_ATTEMPTS; attempt++) {
+    let reply: string;
+    try {
+      reply = await askGateway([
+        { role: "system", content: buildBatchPrompt(plan) },
+        { role: "user", content: `강의 자료 전체 내용:\n${fullText}` },
+      ]);
+    } catch {
+      continue;
+    }
+    const parsed = parseJSON(reply);
+    if (!Array.isArray(parsed) || parsed.length !== plan.length) continue;
+
+    const built: Record<string, unknown>[] = [];
+    let allValid = true;
+    for (let i = 0; i < plan.length; i++) {
+      const item = parsed[i];
+      const question = item && typeof item === "object" ? buildQuestion(plan[i], item as Record<string, unknown>) : null;
+      if (!question) {
+        allValid = false;
+        break;
+      }
+      built.push(question);
+    }
+    if (!allValid) continue;
+
+    const signatures = built.map((q, i) => normalize(promptSignature(plan[i], q)));
+    if (new Set(signatures).size !== signatures.length) continue; // duplicate within the batch itself
+
+    return built;
+  }
+  return null;
+}
+
+// generates the whole quiz at once — one call gives the model visibility
+// into everything it's asking, which is far more reliable for avoiding
+// repeats than asking one-at-a-time with a growing "don't repeat" list.
+// Any slot the batch couldn't validly fill gets individually patched.
+async function generateQuiz(plan: QuestionType[], fullText: string): Promise<Record<string, unknown>[]> {
+  const batch = await generateBatch(plan, fullText);
+  if (batch) return batch;
+
+  const results: Record<string, unknown>[] = [];
+  const exclude: string[] = [];
+  for (const type of plan) {
+    const question = await generateOne(type, fullText, exclude);
+    if (!question) continue;
+    results.push(question);
+    exclude.push(promptSignature(type, question));
+  }
+  return results;
+}
+
+function buildPlan(typeMode: string, count: number): QuestionType[] {
+  if ((QUESTION_TYPES as readonly string[]).includes(typeMode)) {
+    return Array(count).fill(typeMode as QuestionType);
+  }
+  return Array.from({ length: count }, (_, i) => AUTO_MIX[i % AUTO_MIX.length]);
 }
 
 export async function POST(req: NextRequest) {
@@ -155,25 +238,13 @@ export async function POST(req: NextRequest) {
   const formData = await req.formData();
   const file = formData.get("file");
   const textField = formData.get("text");
-  const typeField = formData.get("type");
-  const excludeField = formData.get("exclude");
-  const type = (QUESTION_TYPES as readonly string[]).includes(typeField as string)
-    ? (typeField as QuestionType)
-    : "descriptive";
+  const typeModeField = formData.get("typeMode");
+  const questionCount = Math.min(MAX_QUESTIONS, Math.max(1, Number(formData.get("questionCount")) || 10));
+  const plan = buildPlan(typeof typeModeField === "string" ? typeModeField : "mix", questionCount);
 
-  const exclude: string[] = (() => {
-    if (typeof excludeField !== "string") return [];
-    try {
-      const parsed = JSON.parse(excludeField);
-      return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === "string") : [];
-    } catch {
-      return [];
-    }
-  })();
-
-  // after the first question, the client sends back the already-extracted
+  // after the first "생성" click, the client sends back the already-extracted
   // text instead of re-uploading the file — re-parsing the same PDF/PPTX on
-  // every single question was the main source of slow question generation.
+  // every quiz restart was unnecessary once we already had the text.
   let fullText: string;
   let reusedText = false;
   if (typeof textField === "string" && textField.trim().length >= 100) {
@@ -196,12 +267,12 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const question = await generateOne(type, fullText, exclude);
-  if (!question) {
+  const questions = await generateQuiz(plan, fullText);
+  if (questions.length === 0) {
     return NextResponse.json({ error: "문제를 만들지 못했어요. 다시 시도해주세요." }, { status: 502 });
   }
 
   // only echo the extracted text back the first time (file upload) so the
-  // client can cache it and skip re-extraction on every later question.
-  return NextResponse.json(reusedText ? question : { ...question, sourceText: fullText });
+  // client can cache it and skip re-extraction on every later restart.
+  return NextResponse.json(reusedText ? { questions } : { questions, sourceText: fullText });
 }
