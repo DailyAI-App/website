@@ -41,7 +41,18 @@ const SYSTEM_PROMPTS: Record<QuestionType, string> = {
 
 const MAX_EXCERPT_LENGTH = 4000;
 const MAX_EXCLUDE_ITEMS = 20;
-const MAX_GENERATE_ATTEMPTS = 2;
+const MAX_GENERATE_ATTEMPTS = 4;
+
+function normalize(text: string): string {
+  return text.replace(/\s+/g, "").toLowerCase();
+}
+
+function promptSignature(type: QuestionType, question: Record<string, unknown>): string {
+  if (type === "ox") return String(question.statement ?? "");
+  if (type === "mcq") return String(question.question ?? "");
+  if (type === "fill_blank") return String(question.sentence ?? "");
+  return String(question.explanation ?? "");
+}
 
 function pickExcerpt(text: string): string {
   if (text.length <= MAX_EXCERPT_LENGTH) return text;
@@ -108,6 +119,9 @@ function buildQuestion(type: QuestionType, parsed: Record<string, unknown>): Rec
 }
 
 async function generateOne(type: QuestionType, fullText: string, exclude: string[]): Promise<Record<string, unknown> | null> {
+  const normalizedExclude = exclude.map(normalize);
+  let lastValid: Record<string, unknown> | null = null;
+
   for (let attempt = 0; attempt < MAX_GENERATE_ATTEMPTS; attempt++) {
     let reply: string;
     try {
@@ -120,9 +134,19 @@ async function generateOne(type: QuestionType, fullText: string, exclude: string
     }
     const parsed = parseJSON(reply);
     const question = parsed && buildQuestion(type, parsed);
-    if (question) return question;
+    if (!question) continue;
+    lastValid = question;
+
+    // the "don't repeat these" instruction isn't reliably honored on short
+    // source documents (confirmed: the same OX/fill-blank repeated 3x on a
+    // one-page PDF) — reject exact repeats here instead of just asking nicely.
+    if (!normalizedExclude.includes(normalize(promptSignature(type, question)))) return question;
   }
-  return null;
+
+  // ponytail: a short/narrow document can run out of unique angles for a
+  // type faster than the quiz needs questions — serving one repeat beats
+  // hard-failing the whole quiz after exhausting retries.
+  return lastValid;
 }
 
 export async function POST(req: NextRequest) {
